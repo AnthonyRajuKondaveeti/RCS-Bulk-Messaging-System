@@ -1,0 +1,58 @@
+# RCS Platform - Python Dependencies
+# Python 3.11+ required
+
+# Core Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+alembic==1.12.1
+psycopg2-binary==2.9.9
+
+# Message Queue
+aio-pika==9.3.1  # RabbitMQ async client
+redis==5.0.1
+
+# HTTP Clients
+httpx==0.25.2
+aiohttp==3.9.1
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Monitoring & Observability
+prometheus-client==0.19.0
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-exporter-jaeger==1.21.0
+
+# Configuration
+pyyaml==6.0.1
+python-dotenv==1.0.0
+
+# Utilities
+python-dateutil==2.8.2
+phonenumbers==8.13.26  # Phone number validation
+tenacity==8.2.3  # Retry logic
+structlog==23.2.0  # Structured logging
+
+# Development
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+black==23.12.0
+ruff==0.1.7
+mypy==1.7.1
+httpx==0.25.2  # For testing
+
+# Documentation
+mkdocs==1.5.3
+mkdocs-material==9.5.2

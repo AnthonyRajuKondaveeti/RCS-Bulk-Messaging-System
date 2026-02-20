@@ -1,0 +1,93 @@
+# Production Environment Configuration
+# For production deployment with high security and performance
+
+environment: prod
+debug: false
+
+# Server
+host: 0.0.0.0
+port: 8000
+workers: 8  # Adjust based on CPU cores
+
+# Database
+database:
+  host: ${DB_HOST}
+  port: 5432
+  database: ${DB_NAME}
+  username: ${DB_USER}
+  password: ${DB_PASSWORD}
+  pool_size: 50
+  max_overflow: 20
+  echo: false
+
+# Redis
+redis:
+  host: ${REDIS_HOST}
+  port: 6379
+  db: 0
+  password: ${REDIS_PASSWORD}
+  max_connections: 100
+
+# RabbitMQ
+rabbitmq:
+  host: ${RABBITMQ_HOST}
+  port: 5672
+  username: ${RABBITMQ_USER}
+  password: ${RABBITMQ_PASSWORD}
+  vhost: /rcs-prod
+  prefetch_count: 20
+  heartbeat: 60
+
+# Gupshup
+gupshup:
+  api_key: ${GUPSHUP_API_KEY}
+  app_name: ${GUPSHUP_APP_NAME}
+  base_url: https://api.gupshup.io/wa/api/v1
+  webhook_secret: ${GUPSHUP_WEBHOOK_SECRET}
+  timeout: 30
+  max_retries: 3
+
+# Default aggregator
+default_aggregator: gupshup
+
+# Observability
+observability:
+  enable_metrics: true
+  metrics_port: 9090
+  enable_tracing: true
+  jaeger_endpoint: ${JAEGER_ENDPOINT}
+  otel_service_name: rcs-platform-prod
+  log_level: INFO
+  log_format: json
+
+# Rate Limiting
+rate_limit:
+  enabled: true
+  default_limit: 100  # per minute per tenant
+  gupshup_limit: 1000  # messages per second
+  route_limit: 500
+
+# Retry Configuration
+retry:
+  max_retries: 3
+  retry_backoff: 60  # seconds
+  enable_fallback: true
+  fallback_delay: 300  # 5 minutes
+  dlq_retention: 30  # days in production
+
+# Security
+security:
+  secret_key: ${SECRET_KEY}  # MUST be strong in production
+  jwt_algorithm: HS256
+  access_token_expire_minutes: 30
+  api_key_header: X-API-Key
+  cors_origins:
+    - https://app.yourdomain.com
+    - https://dashboard.yourdomain.com
+
+# Queue Names
+queue_names:
+  campaign_orchestrator: campaign.orchestrator
+  message_dispatcher: message.dispatch
+  fallback_handler: message.fallback
+  webhook_processor: webhook.process

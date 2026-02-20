@@ -1,0 +1,91 @@
+# Development Environment Configuration
+# For local development with Docker Compose
+
+environment: dev
+debug: true
+
+# Server
+host: 0.0.0.0
+port: 8000
+workers: 2
+
+# Database
+database:
+  host: localhost
+  port: 5432
+  database: rcs_platform_dev
+  username: postgres
+  password: postgres  # Override with DB_PASSWORD env var
+  pool_size: 10
+  max_overflow: 5
+  echo: true  # SQL query logging
+
+# Redis
+redis:
+  host: localhost
+  port: 6379
+  db: 0
+  password: null
+  max_connections: 20
+
+# RabbitMQ
+rabbitmq:
+  host: localhost
+  port: 5672
+  username: guest
+  password: guest  # Override with RABBITMQ_PASSWORD
+  vhost: /
+  prefetch_count: 5
+
+# Gupshup (requires env vars)
+gupshup:
+  api_key: ${GUPSHUP_API_KEY}
+  app_name: ${GUPSHUP_APP_NAME}
+  base_url: https://api.gupshup.io/wa/api/v1
+  webhook_secret: ${GUPSHUP_WEBHOOK_SECRET}
+  timeout: 30
+  max_retries: 3
+
+# Default aggregator
+default_aggregator: gupshup
+
+# Observability
+observability:
+  enable_metrics: true
+  metrics_port: 9090
+  enable_tracing: true
+  jaeger_endpoint: http://localhost:14268/api/traces
+  otel_service_name: rcs-platform-dev
+  log_level: DEBUG
+  log_format: text  # More readable for dev
+
+# Rate Limiting (relaxed for dev)
+rate_limit:
+  enabled: true
+  default_limit: 1000  # per minute
+  gupshup_limit: 1000
+  route_limit: 500
+
+# Retry Configuration
+retry:
+  max_retries: 3
+  retry_backoff: 30  # seconds
+  enable_fallback: true
+  fallback_delay: 60  # 1 minute (faster for testing)
+  dlq_retention: 7
+
+# Security
+security:
+  secret_key: ${SECRET_KEY:-dev-secret-key-change-in-production}
+  jwt_algorithm: HS256
+  access_token_expire_minutes: 60
+  cors_origins:
+    - http://localhost:3000
+    - http://localhost:8000
+
+# Queue Names
+queue_names:
+  campaign_orchestrator: campaign.orchestrator
+  message_dispatcher: message.dispatch
+  fallback_handler: message.fallback
+  webhook_processor: webhook.process
