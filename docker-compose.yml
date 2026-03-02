@@ -1,0 +1,120 @@
+# Docker Compose for RCS Platform - Local Development
+# Starts PostgreSQL, RabbitMQ, Redis, Jaeger
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: rcs-postgres
+    environment:
+      POSTGRES_DB: rcs_platform_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: rcs_dev_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RabbitMQ Message Queue
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: rcs-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Rate Limiting
+  redis:
+    image: redis:7-alpine
+    container_name: rcs-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Jaeger Tracing
+  jaeger:
+    image: jaegertracing/all-in-one:1.51
+    container_name: rcs-jaeger
+    ports:
+      - "6831:6831/udp" # Jaeger agent
+      - "16686:16686" # Jaeger UI
+      - "14268:14268" # Collector HTTP
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+
+  # Prometheus (Optional)
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: rcs-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  # Background Worker (Orchestrator, Dispatcher, etc.)
+  worker:
+    build: .
+    container_name: rcs-worker
+    command: python -m apps.workers.manager
+    environment:
+      - ENVIRONMENT=dev
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=rcs_platform_dev
+      - DB_USER=postgres
+      - DB_PASSWORD=rcs_dev_pass
+      - RABBITMQ_HOST=rcs-rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASSWORD=guest
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - USE_MOCK_AGGREGATOR=true
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+  redis_data:
+  prometheus_data:
+
+
+networks:
+  default:
+    name: rcs-network

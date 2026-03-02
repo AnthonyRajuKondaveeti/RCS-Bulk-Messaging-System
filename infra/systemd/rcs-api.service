@@ -1,0 +1,26 @@
+[Unit]
+Description=RCS Platform API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=rcs
+Group=rcs
+WorkingDirectory=/opt/rcs-platform
+Environment="ENVIRONMENT=prod"
+EnvironmentFile=/opt/rcs-platform/.env
+ExecStart=/opt/rcs-platform/venv/bin/uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --workers 4
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rcs-api
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=1G
+
+[Install]
+WantedBy=multi-user.target

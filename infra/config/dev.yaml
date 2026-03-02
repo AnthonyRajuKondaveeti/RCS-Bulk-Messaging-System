@@ -1,0 +1,75 @@
+# Development Environment Configuration
+# Overridden by environment variables — see apps/core/config.py
+
+environment: dev
+debug: true
+
+host: 0.0.0.0
+port: 8000
+workers: 2
+
+database:
+  host: localhost
+  port: 5432
+  database: rcs_platform_dev
+  username: postgres
+  password: postgres      # override: DB_PASSWORD
+  pool_size: 10
+  max_overflow: 5
+  echo: true              # SQL query logging in dev
+
+redis:
+  host: localhost
+  port: 6379
+  db: 0
+  password: null
+  max_connections: 20
+
+rabbitmq:
+  host: localhost
+  port: 5672
+  username: guest
+  password: guest         # override: RABBITMQ_PASSWORD
+  vhost: /
+  prefetch_count: 5
+
+# rcssms.in aggregator — override all three with env vars for real sends
+# RCS_USERNAME, RCS_PASSWORD, RCS_ID  must be set in .env
+# Leave rcssms block absent here; env vars in .env will populate it.
+# Set USE_MOCK_AGGREGATOR=true in .env for local testing without real API calls.
+
+default_aggregator: rcssms
+use_mock_aggregator: true   # safe default for dev; override in .env
+
+observability:
+  enable_metrics: true
+  metrics_port: 9090
+  enable_tracing: false
+  log_level: DEBUG
+  log_format: text          # readable in dev console
+
+rate_limit:
+  enabled: true
+  default_limit: 1000       # per minute (relaxed for dev)
+  rcssms_limit: 1000
+
+retry:
+  max_retries: 3
+  retry_backoff: 30
+  enable_fallback: true
+  fallback_delay: 60        # 1 min in dev (prod: 300)
+  dlq_retention: 7
+
+security:
+  secret_key: dev-secret-key-change-in-production   # override: SECRET_KEY
+  jwt_algorithm: HS256
+  access_token_expire_minutes: 60
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8000"
+
+queue_names:
+  campaign_orchestrator: campaign.orchestrator
+  message_dispatcher:    message.dispatch
+  fallback_handler:      message.fallback
+  webhook_processor:     webhook.process

@@ -1,0 +1,65 @@
+# .dockerignore — exclude everything that doesn't belong in the build context
+# Keeps the image lean and prevents secrets from leaking into layers
+
+# Version control
+.git/
+.gitignore
+
+# Secrets — never bake these into the image
+.env
+.env.*
+*.env
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# Test / CI artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+tests/local/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docs (not needed at runtime)
+docs/
+*.md
+
+# Dev-only compose files (prod only needs the image)
+docker-compose.yml
+docker-compose.prod.yml
+docker-compose.override.yml
+
+# Monitoring config (mounted as volume in prod)
+prometheus.yml
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# mypy / ruff caches
+.mypy_cache/
+.ruff_cache/

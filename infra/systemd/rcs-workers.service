@@ -1,0 +1,26 @@
+[Unit]
+Description=RCS Platform Workers
+After=network.target postgresql.service rabbitmq-server.service
+
+[Service]
+Type=simple
+User=rcs
+Group=rcs
+WorkingDirectory=/opt/rcs-platform
+Environment="ENVIRONMENT=prod"
+EnvironmentFile=/opt/rcs-platform/.env
+ExecStart=/opt/rcs-platform/venv/bin/python -m apps.workers.manager
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rcs-workers
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=2G
+
+[Install]
+WantedBy=multi-user.target

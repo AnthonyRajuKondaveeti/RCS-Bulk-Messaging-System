@@ -1,0 +1,306 @@
+# =============================================================================
+# RCS Platform — Production Docker Compose
+#
+# Phase 6: Each worker type runs as its own service so they can be scaled
+# independently without touching each other.
+#
+#   Worker scaling model:
+#     orchestrator  — 1 replica  (owns campaign scheduling state)
+#     dispatcher    — scale freely (stateless queue consumer)
+#     webhook       — scale freely (stateless queue consumer)
+#     fallback      — 1–2 replicas (low-volume, stateless)
+#
+#   Scale example:
+#     docker compose -f docker-compose.prod.yml up -d --scale dispatcher=4
+#     docker compose -f docker-compose.prod.yml up -d --scale webhook=2
+#
+# Differences from docker-compose.yml (dev):
+#   - No source-code volume mounts
+#   - All DB/MQ ports are internal only (no host binding)
+#   - restart: always on all services
+#   - Resource limits on every container
+#   - Credentials come from .env.prod (env_file), never inline
+#   - RabbitMQ uses RABBITMQ_USERNAME / RABBITMQ_PASSWORD (not guest/guest)
+#   - Redis is password-protected
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+# =============================================================================
+
+version: '3.8'
+
+# ---------------------------------------------------------------------------
+# Shared configuration fragments
+# ---------------------------------------------------------------------------
+x-app-common: &app-common
+  image: rcs-platform:${APP_VERSION:-latest}
+  env_file: .env.prod
+  restart: always
+  networks:
+    - rcs-internal
+  depends_on:
+    postgres:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+# Shared resource limits for stateless queue-consumer workers
+x-worker-resources: &worker-resources
+  deploy:
+    resources:
+      limits:
+        cpus: "1.0"
+        memory: 512M
+      reservations:
+        cpus: "0.25"
+        memory: 128M
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL
+  # No host port binding — only accessible inside rcs-internal network
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: rcs-postgres-prod
+    restart: always
+    env_file: .env.prod # reads POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - rcs-internal
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rcs_user}" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          memory: 512M
+    # INTENTIONALLY no ports: mapping — DB is never exposed to the host
+
+    # ---------------------------------------------------------------------------
+    # RabbitMQ — production credentials from .env.prod
+    # Management UI bound to 127.0.0.1 only
+    # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: rcs-rabbitmq-prod
+    restart: always
+    environment:
+      # Phase 5: no guest/guest — must be set in .env.prod
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - rcs-internal
+    # Management UI available only on loopback — never public
+    ports:
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Redis — password required (set REDIS_PASSWORD in .env.prod)
+  # Also used as shared state store for the Redis-backed circuit breaker
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: rcs-redis-prod
+    restart: always
+    command: >
+      sh -c "redis-server
+        --requirepass $${REDIS_PASSWORD}
+        --appendonly yes
+        --maxmemory 512mb
+        --maxmemory-policy allkeys-lru"
+    env_file: .env.prod
+    volumes:
+      - redis_data:/data
+    networks:
+      - rcs-internal
+    # No host port — only internal
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "$${REDIS_PASSWORD}", "ping" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+        reservations:
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # API Service — Gunicorn + UvicornWorker
+  # The only service with a public port
+  # ---------------------------------------------------------------------------
+  api:
+    <<: *app-common
+    container_name: rcs-api-prod
+    # CMD from Dockerfile: gunicorn apps.api.main:app -k uvicorn.workers.UvicornWorker
+    ports:
+      - "8000:8000" # Expose ONLY the API port. Put Nginx/ALB in front.
+    environment:
+      SERVICE_NAME: api
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2G
+        reservations:
+          cpus: "1.0"
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # Orchestrator Worker — owns campaign scheduling
+  # Scale: exactly 1 replica (stateful — reads campaign jobs from the DB)
+  #
+  # ENV:
+  #   ORCHESTRATOR_BATCH_SIZE  (default 1000) — keyset batch size for contacts
+  # ---------------------------------------------------------------------------
+  worker-orchestrator:
+    <<: *app-common
+    container_name: rcs-worker-orchestrator
+    command: [ "python", "-m", "apps.workers.entrypoints.orchestrator" ]
+    environment:
+      SERVICE_NAME: worker-orchestrator
+      ORCHESTRATOR_BATCH_SIZE: ${ORCHESTRATOR_BATCH_SIZE:-1000}
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import sys; sys.exit(0)" ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 1 # Do NOT scale > 1 — owns scheduling state
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # Dispatcher Worker — stateless queue consumer
+  # Scale freely: each replica independently processes message.dispatch queue
+  #
+  # ENV:
+  #   DISPATCHER_CONCURRENCY  (default 10) — concurrent sends per replica
+  # ---------------------------------------------------------------------------
+  worker-dispatcher:
+    <<: *app-common
+    command: [ "python", "-m", "apps.workers.entrypoints.dispatcher" ]
+    environment:
+      SERVICE_NAME: worker-dispatcher
+      DISPATCHER_CONCURRENCY: ${DISPATCHER_CONCURRENCY:-10}
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import sys; sys.exit(0)" ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: ${DISPATCHER_REPLICAS:-2} # Scale up for higher throughput
+      <<: *worker-resources
+
+  # ---------------------------------------------------------------------------
+  # Webhook Processor — stateless DLR consumer
+  # Scale freely: each replica independently processes webhook.process queue
+  #
+  # ENV:
+  #   WEBHOOK_CONCURRENCY  (default 20) — concurrent webhook jobs per replica
+  # ---------------------------------------------------------------------------
+  worker-webhook:
+    <<: *app-common
+    command: [ "python", "-m", "apps.workers.entrypoints.webhook" ]
+    environment:
+      SERVICE_NAME: worker-webhook
+      WEBHOOK_CONCURRENCY: ${WEBHOOK_CONCURRENCY:-20}
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import sys; sys.exit(0)" ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: ${WEBHOOK_REPLICAS:-1}
+      <<: *worker-resources
+
+  # ---------------------------------------------------------------------------
+  # SMS Fallback Worker — low-volume, stateless
+  # Typically 1 replica is sufficient; scale if fallback volume is high
+  #
+  # ENV:
+  #   FALLBACK_CONCURRENCY  (default 5) — concurrent fallback jobs per replica
+  # ---------------------------------------------------------------------------
+  worker-fallback:
+    <<: *app-common
+    command: [ "python", "-m", "apps.workers.entrypoints.fallback" ]
+    environment:
+      SERVICE_NAME: worker-fallback
+      FALLBACK_CONCURRENCY: ${FALLBACK_CONCURRENCY:-5}
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import sys; sys.exit(0)" ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: ${FALLBACK_REPLICAS:-1}
+      <<: *worker-resources
+
+# ---------------------------------------------------------------------------
+# Volumes — all named, managed by Docker (not host bind mounts)
+# ---------------------------------------------------------------------------
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Networks — single internal bridge; API exposed via port mapping only
+# ---------------------------------------------------------------------------
+networks:
+  rcs-internal:
+    name: rcs-prod-network
+    driver: bridge
+    internal: false # set to true if behind an external proxy/LB on the same host
