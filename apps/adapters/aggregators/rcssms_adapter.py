@@ -125,6 +125,11 @@ class RcsSmsAdapter(AggregatorPort):
             recovery_timeout=60,
             success_threshold=2,
         )
+    
+    async def connect(self) -> None:
+        """Connect to aggregator (opens circuit breaker connection)"""
+        # Circuit breaker connects lazily on first use, but we can pre-initialize if needed
+        logger.info("RcsSmsAdapter: connect called", extra={"username": self.username})
 
     # ------------------------------------------------------------------
     # AggregatorPort interface
@@ -211,17 +216,20 @@ class RcsSmsAdapter(AggregatorPort):
         request: SendMessageRequest,
     ) -> SendMessageResponse:
         """
-        SMS fallback — rcssms.in does not have a separate SMS endpoint.
-        Send a BASIC RCS template as the closest fallback.
+        rcssms.in has no SMS endpoint — this method must never be called.
 
-        Note: For true SMS fallback, integrate a separate SMS provider.
+        SMS fallback is handled exclusively by SmsIdeaAdapter (smsidea.co.in).
+        SMSFallbackWorker obtains that adapter via AggregatorFactory.create_sms_adapter().
+
+        Raising here (rather than silently re-sending as RCS) ensures that a
+        misconfiguration — e.g. the fallback worker accidentally using the RCS
+        adapter — is caught immediately instead of silently ignoring the fallback.
         """
-        logger.warning(
-            "rcssms.in does not support plain SMS. "
-            "Sending as BASIC RCS template instead."
+        raise NotImplementedError(
+            "RcsSmsAdapter does not support SMS. "
+            "Use SmsIdeaAdapter (smsidea.co.in) for SMS fallback. "
+            "Obtain it via AggregatorFactory.create_sms_adapter()."
         )
-        # Treat as basic RCS send
-        return await self.send_rcs_message(request)
 
     async def check_rcs_capability(
         self,
@@ -449,39 +457,61 @@ class RcsSmsAdapter(AggregatorPort):
         request: SendMessageRequest,
     ) -> Dict[str, Any]:
         """
-        Build rcssms.in JSON payload (METHOD 1 format).
+        Build rcssms.in JSON payload (METHOD 1 / apitype=1 format).
 
-        Determines rcstype based on message content:
-          - rich_card with carousel  -> RICHCASOUREL
-          - rich_card                -> RICH
-          - plain text               -> BASIC
+        rcstype resolution (priority order):
+          1. metadata["rcs_type"]  — explicitly set by orchestrator from template.rcs_type
+          2. rich_card present     — RICH
+          3. default               — BASIC
+          RICHCASOUREL is only set via metadata["rcs_type"]; it cannot be inferred
+          from rich_card alone because the domain RichCard model is single-card.
+
+        Variables format (METHOD 1 spec):
+          The API expects an array of objects, one object per recipient, where
+          keys are var1, var2, var3... in template placeholder order:
+              "variables": [{"var1": "John", "var2": "ORD-123"}]
+          The raw metadata["variables"] is an ordered flat list of values
+          (e.g. ["John", "ORD-123"]) so we convert it here.
+          For a single recipient (the normal case) this produces one object.
+
+        Phone format:
+          The API accepts numbers with or without the 91 country code prefix.
+          The domain normalises to E.164 (+91XXXXXXXXXX) which is accepted as-is.
         """
-        # Determine template type
-        if request.rich_card:
-            rcs_type = "RICH"
-        else:
-            rcs_type = "BASIC"
+        meta = request.metadata or {}
 
-        # Build msisdn — can be comma-separated (up to 500)
-        msisdn = request.recipient_phone
+        # --- rcstype ---
+        # Prefer the explicit value stored by the orchestrator (from template.rcs_type).
+        # Fall back to inference from rich_card for backward compatibility.
+        rcs_type = meta.get("rcs_type") or (
+            "RICH" if request.rich_card else "BASIC"
+        )
 
         payload: Dict[str, Any] = {
-            "rcstype": rcs_type,
+            "rcstype": rcs_type.upper(),
             "rcsid": self.rcs_id,
-            "msisdn": msisdn,
-            "templateid": request.metadata.get("template_id", "") if request.metadata else "",
+            "msisdn": request.recipient_phone,
+            "templateid": meta.get("template_id", ""),
         }
 
-        # Auth — omit password if using bearer token
+        # Auth — per docs, password tag is optional when using bearer token
+        payload["username"] = self.username
         if not self.use_bearer:
-            payload["username"] = self.username
             payload["password"] = self.password
-        else:
-            payload["username"] = self.username
 
-        # Build variables if present in metadata
-        if request.metadata and request.metadata.get("variables"):
-            payload["variables"] = request.metadata["variables"]
+        # --- variables ---
+        # Convert flat ordered list ["val1", "val2"] to Method 1 format:
+        # [{"var1": "val1", "var2": "val2"}] — one object per recipient.
+        raw_vars = meta.get("variables")
+        if raw_vars:
+            if isinstance(raw_vars, list) and len(raw_vars) > 0:
+                if isinstance(raw_vars[0], dict):
+                    # Already in Method 1 object format — pass through
+                    payload["variables"] = raw_vars
+                else:
+                    # Flat list of values — convert to Method 1 keyed object
+                    var_obj = {f"var{i + 1}": str(v) for i, v in enumerate(raw_vars)}
+                    payload["variables"] = [var_obj]
 
         return payload
 

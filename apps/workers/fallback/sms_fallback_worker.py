@@ -28,6 +28,7 @@ from apps.adapters.queue.rabbitmq import RabbitMQAdapter
 from apps.core.ports.queue import QueueJob
 from apps.core.ports.aggregator import SendMessageRequest, AggregatorException
 from apps.core.aggregators.factory import AggregatorFactory
+from apps.adapters.aggregators.mock_adapter import MockAdapter
 from apps.core.config import get_settings
 
 
@@ -72,7 +73,21 @@ class SMSFallbackWorker:
         await self.queue.connect()
 
         if not self.aggregator:
-            self.aggregator = AggregatorFactory.create_aggregator(self.settings)
+            if self.settings.use_mock_aggregator:
+                logger.info("🧪 Creating MOCK SMS Fallback Adapter")
+                self.aggregator = MockAdapter(
+                    success_rate=0.95,
+                    delay=0.1,
+                    rcs_capable_rate=0.0,
+                )
+            else:
+                self.aggregator = AggregatorFactory.create_sms_adapter(self.settings)
+                if not self.aggregator:
+                    logger.error(
+                        "SMS fallback adapter not configured — "
+                        "set SMS_USERNAME / SMS_PASSWORD / SMS_SENDER_ID in .env. "
+                        "Worker will consume jobs but skip sending."
+                    )
 
         self.running = True
 
@@ -154,6 +169,19 @@ class SMSFallbackWorker:
                     )
 
                     try:
+                        if not self.aggregator:
+                            logger.error(
+                                "SMS fallback adapter not configured — "
+                                f"dropping fallback for message {message_id}. "
+                                "Set SMS_USERNAME / SMS_PASSWORD / SMS_SENDER_ID in .env."
+                            )
+                            message.mark_failed(
+                                reason=FailureReason.NETWORK_ERROR,
+                                error_message="SMS adapter not configured",
+                            )
+                            await uow.messages.save(message)
+                            return
+
                         response = await self.aggregator.send_sms_message(request)
 
                         if response.success:

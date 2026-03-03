@@ -86,10 +86,10 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # 2. Backfill: unnest existing JSON blobs into rows
     #
-    # audiences.contacts is a JSON array of objects:
+    # audiences.contacts is a JSONB array of objects:
     #   [{"phone_number": "+91…", "variables": […], "metadata": {…}}, …]
     #
-    # json_to_recordset() in PostgreSQL turns a JSON array of objects
+    # jsonb_to_recordset() in PostgreSQL turns a JSONB array of objects
     # into a virtual table — exactly what we need for a bulk INSERT.
     # ------------------------------------------------------------------
     op.execute(
@@ -106,14 +106,14 @@ def upgrade() -> None:
             COALESCE(c.metadata::jsonb, '{}'::jsonb)      AS metadata_
         FROM
             audiences a,
-            json_to_recordset(a.contacts) AS c(
+            jsonb_to_recordset(a.contacts) AS c(
                 phone_number text,
-                variables    json,
-                metadata     json
+                variables    jsonb,
+                metadata     jsonb
             )
         WHERE
             a.contacts IS NOT NULL
-            AND json_array_length(a.contacts) > 0
+            AND jsonb_array_length(a.contacts) > 0
         ON CONFLICT (audience_id, phone_number) DO NOTHING
         """
     )

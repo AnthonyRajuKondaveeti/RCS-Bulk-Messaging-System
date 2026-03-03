@@ -99,6 +99,10 @@ class Template:
         self.created_at = created_at or datetime.utcnow()
         self.updated_at = updated_at or datetime.utcnow()
         
+        # RCS aggregator fields
+        self.external_template_id: Optional[str] = None  # rcssms.in template ID
+        self.rcs_type: str = "BASIC"  # BASIC, RICH, RICHCASOUREL
+        
         # Metadata
         self.description: Optional[str] = None
         self.category: Optional[str] = None
@@ -320,6 +324,22 @@ class Template:
         if self.status != TemplateStatus.PENDING_APPROVAL:
             raise ValueError("Template is not pending approval")
         
+        self.status = TemplateStatus.APPROVED
+        self.updated_at = datetime.utcnow()
+    
+    def approve_template(self, external_template_id: str, rcs_type: str = "BASIC") -> None:
+        """
+        Approve template with external ID (convenience for testing).
+        
+        In production, templates go through submit_for_approval() -> approve() flow.
+        For mock/testing, this directly approves and sets external_template_id.
+        
+        Args:
+            external_template_id: rcssms.in template ID (e.g. "7U5QvSVi5e")
+            rcs_type: Template type (BASIC, RICH, RICHCASOUREL)
+        """
+        self.external_template_id = external_template_id
+        self.rcs_type = rcs_type
         self.status = TemplateStatus.APPROVED
         self.updated_at = datetime.utcnow()
     

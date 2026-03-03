@@ -394,6 +394,7 @@ class DeliveryService:
             metadata={
                 "template_id": message.content.template_id,
                 "variables": message.content.variables or [],
+                "rcs_type": message.content.rcs_type,   # BASIC|RICH|RICHCASOUREL
             },
         )
 
@@ -448,16 +449,40 @@ class DeliveryService:
         await self.queue.enqueue_batch(queue_messages)
 
     async def _queue_fallback(self, message: Message) -> None:
-        """Queue message for SMS fallback."""
+        """
+        Queue message for SMS fallback.
+
+        BUG FIX: Previously called _queue_message_for_delivery() which pushed
+        to the 'message_dispatcher' queue.  The dispatcher uses RcsSmsAdapter
+        (RCS-only) so the fallback message would be re-sent as RCS — defeating
+        the entire purpose of the fallback.
+
+        The correct queue is 'fallback_handler', consumed exclusively by
+        SMSFallbackWorker which uses SmsIdeaAdapter (smsidea.co.in).
+        """
+        from apps.core.config import get_settings
+
+        settings = get_settings()
+
         message.trigger_fallback()
         await self.uow.messages.save(message)
-        await self._queue_message_for_delivery(message)
+
+        await self.queue.enqueue(
+            QueueMessage(
+                id=str(message.id),
+                queue_name=settings.queue_names["fallback_handler"],
+                payload={"message_id": str(message.id)},
+                priority=self._map_priority(message.priority),
+            )
+        )
+
         logger.info(
-            "SMS fallback triggered",
+            "SMS fallback queued",
             extra={
                 "message_id": str(message.id),
                 "recipient": message.recipient_phone,
                 "failure_reason": str(message.failure_reason),
+                "queue": settings.queue_names["fallback_handler"],
                 "step": "fallback_queued",
             },
         )

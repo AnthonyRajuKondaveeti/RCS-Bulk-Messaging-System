@@ -228,45 +228,6 @@ def upgrade() -> None:
     op.create_index("ix_events_aggregate", "events", ["aggregate_id", "version"])
     op.create_index("ix_events_type_created", "events", ["event_type", "created_at"])
 
-    # ------------------------------------------------------------------ #
-    # audiences
-    # ------------------------------------------------------------------ #
-    op.create_table(
-        "audiences",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
-        sa.Column("name", sa.String(200), nullable=False),
-        sa.Column("audience_type", sa.String(50), nullable=False, default="static"),
-        sa.Column("status", sa.String(50), nullable=False, default="draft"),
-        sa.Column("description", sa.Text, nullable=True),
-        sa.Column("tags", postgresql.JSON, nullable=True),
-        sa.Column("query", postgresql.JSON, nullable=True),
-        sa.Column("contacts", postgresql.JSON, nullable=True),
-        sa.Column("total_contacts", sa.Integer, default=0),
-        sa.Column("valid_contacts", sa.Integer, default=0),
-        sa.Column("invalid_contacts", sa.Integer, default=0),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            onupdate=sa.func.now(),
-            nullable=False,
-        ),
-        sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.create_index(
-        "idx_audiences_tenant_status", "audiences", ["tenant_id", "status"]
-    )
-    op.create_index(
-        "idx_audiences_tenant_type", "audiences", ["tenant_id", "audience_type"]
-    )
-
 
 def downgrade() -> None:
     """Drop all tables in reverse dependency order."""

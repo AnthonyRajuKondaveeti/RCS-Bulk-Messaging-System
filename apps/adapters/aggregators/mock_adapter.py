@@ -51,6 +51,10 @@ class MockAdapter(AggregatorPort):
         self.delay = delay
         self.rcs_capable_rate = rcs_capable_rate
         self._sent_messages: List[Dict[str, Any]] = []
+    
+    async def connect(self) -> None:
+        """Connect to aggregator (no-op for mock)"""
+        logger.info("MockAdapter: connect called (no-op)")
 
     # ------------------------------------------------------------------
     # AggregatorPort interface
@@ -217,3 +221,15 @@ class MockAdapter(AggregatorPort):
     def reset(self) -> None:
         """Clear sent message history."""
         self._sent_messages.clear()
+
+    def print_stats(self) -> None:
+        """Print statistics about sent messages (for testing)."""
+        total = len(self._sent_messages)
+        rcs_count = sum(1 for m in self._sent_messages if m.get('channel') == 'rcs')
+        sms_count = sum(1 for m in self._sent_messages if m.get('channel') == 'sms')
+        
+        print(f"\n📊 Mock Adapter Stats:")
+        print(f"   Total messages: {total}")
+        print(f"   RCS: {rcs_count}")
+        print(f"   SMS: {sms_count}")
+        print(f"   Success rate: {self.success_rate * 100:.0f}%")

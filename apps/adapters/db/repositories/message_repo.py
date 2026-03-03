@@ -216,9 +216,10 @@ class SQLAlchemyMessageRepository(MessageRepository):
             text=raw.get("text", ""),
             rich_card=rich_card,
             suggestions=suggestions,
-            # FIXED: restore template_id and variables from persisted JSON
+            # FIXED: restore template_id, variables, and rcs_type from persisted JSON
             template_id=raw.get("template_id"),
             variables=raw.get("variables", []),
+            rcs_type=raw.get("rcs_type", "BASIC"),
         )
 
         message = Message(
@@ -266,9 +267,10 @@ class SQLAlchemyMessageRepository(MessageRepository):
         """
         content_data: Dict[str, Any] = {
             "text": message.content.text,
-            # FIXED: persist template_id and variables
+            # FIXED: persist template_id, variables, and rcs_type
             "template_id": message.content.template_id,
             "variables": message.content.variables,
+            "rcs_type": message.content.rcs_type,
         }
 
         if message.content.rich_card:
@@ -339,8 +341,9 @@ class SQLAlchemyMessageRepository(MessageRepository):
         model.metadata_ = message.metadata
         model.updated_at = datetime.utcnow()
 
-        # Update content blob to keep template_id/variables current
+        # Update content blob to keep template_id/variables/rcs_type current
         existing_content = model.content or {}
         existing_content["template_id"] = message.content.template_id
         existing_content["variables"] = message.content.variables
+        existing_content["rcs_type"] = message.content.rcs_type
         model.content = existing_content

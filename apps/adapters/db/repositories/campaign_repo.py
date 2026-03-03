@@ -337,6 +337,12 @@ class SQLAlchemyCampaignRepository(CampaignRepository):
         campaign.tags = model.tags or []
         campaign.recipient_count = model.recipient_count
         
+        # Restore audience_ids from metadata if present
+        if "audience_ids" in campaign.metadata:
+            campaign.audience_ids = [
+                UUID(aid) for aid in campaign.metadata["audience_ids"]
+            ]
+        
         return campaign
     
     def _to_model(self, campaign: Campaign) -> CampaignModel:

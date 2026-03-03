@@ -193,8 +193,13 @@ async def main():
         logger.info("Received shutdown signal")
         asyncio.create_task(manager.stop_all())
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _handle_signal)
+    # loop.add_signal_handler is Unix-only; gracefully skip on Windows
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _handle_signal)
+    except NotImplementedError:
+        # Windows: fall back to KeyboardInterrupt handling below
+        pass
 
     try:
         await manager.start_all()

@@ -39,8 +39,12 @@ async def main() -> None:
         logger.info("shutdown_signal_received", worker="fallback")
         asyncio.create_task(worker.stop())
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _stop)
+    # loop.add_signal_handler is Unix-only; gracefully skip on Windows
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _stop)
+    except NotImplementedError:
+        pass
 
     logger.info("worker_starting", worker="fallback", concurrency=CONCURRENCY)
     await worker.start()

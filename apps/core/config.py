@@ -14,6 +14,12 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 import os
 import yaml
+from dotenv import load_dotenv
+
+# Load .env file at the top to ensure os.getenv() works correctly
+load_dotenv()
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DatabaseConfig(BaseModel):
@@ -58,11 +64,12 @@ class RedisConfig(BaseModel):
 class RabbitMQConfig(BaseModel):
     host: str = "localhost"
     port: int = 5672
-    # No default credentials — must be supplied via env vars.
-    # In development, set RABBITMQ_USERNAME / RABBITMQ_PASSWORD in .env.
-    # In production, these come from .env.prod via docker-compose env_file.
-    username: str = Field(..., description="RabbitMQ username — no default, must be set")
-    password: str = Field(..., description="RabbitMQ password — no default, must be set")
+    # Safe dev defaults — always overridden by YAML (infra/config/dev.yaml)
+    # and env vars (RABBITMQ_USERNAME / RABBITMQ_PASSWORD).
+    # Field(...) caused pydantic v2 to crash when Settings tried to construct
+    # RabbitMQConfig() as a model-field default.
+    username: str = Field(default="guest", description="RabbitMQ username")
+    password: str = Field(default="guest", description="RabbitMQ password")
     vhost: str = "/"
     prefetch_count: int = 10
     heartbeat: int = 60
@@ -81,6 +88,15 @@ class RcsSmsConfig(BaseModel):
     use_bearer: bool = True
     timeout: int = 30
     use_mock: bool = False
+
+
+class SmsIdeaConfig(BaseModel):
+    """smsidea.co.in SMS adapter configuration (used for RCS fallback)."""
+    username: str = Field(..., description="smsidea.co.in portal login username")
+    password: str = Field(..., description="smsidea.co.in password or API key")
+    sender_id: str = Field(..., description="6-char DLT-approved sender ID (e.g. MYBRND)")
+    peid: Optional[str] = Field(None, description="Principal Entity ID from DLT portal")
+    timeout: int = 30
 
 
 class ObservabilityConfig(BaseModel):
@@ -126,7 +142,7 @@ class SecurityConfig(BaseModel):
     cors_allow_credentials: bool = False
 
 
-class Settings(BaseModel):
+class Settings(BaseSettings):
     """
     Application settings — loaded from YAML then overridden by env vars.
 
@@ -151,6 +167,8 @@ class Settings(BaseModel):
 
     # Aggregator — rcssms.in only; Gupshup removed
     rcssms: Optional[RcsSmsConfig] = None
+    # SMS fallback provider (smsidea.co.in)
+    smsidea: Optional[SmsIdeaConfig] = None
     default_aggregator: str = "rcssms"
     use_mock_aggregator: bool = False
 
@@ -166,9 +184,11 @@ class Settings(BaseModel):
         "webhook_processor":     "webhook.process",
     }
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
 
 
 def _load_yaml(environment: str) -> Dict[str, Any]:
@@ -203,6 +223,8 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
     rmq = config.setdefault("rabbitmq", {})
     if os.getenv("RABBITMQ_HOST"):
         rmq["host"] = os.getenv("RABBITMQ_HOST")
+    if os.getenv("RABBITMQ_PORT"):
+        rmq["port"] = int(os.getenv("RABBITMQ_PORT"))
     if os.getenv("RABBITMQ_USERNAME"):
         rmq["username"] = os.getenv("RABBITMQ_USERNAME")
     if os.getenv("RABBITMQ_PASSWORD"):
@@ -228,6 +250,19 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
             "use_bearer": os.getenv("RCS_USE_BEARER", "true").lower() == "true",
             "timeout": int(os.getenv("RCS_TIMEOUT", "30")),
             "use_mock": os.getenv("USE_MOCK_AGGREGATOR", "false").lower() == "true",
+        }
+
+    # smsidea.co.in SMS fallback aggregator
+    sms_username = os.getenv("SMS_USERNAME")
+    sms_password = os.getenv("SMS_PASSWORD")
+    sms_sender_id = os.getenv("SMS_SENDER_ID")
+    if sms_username and sms_password and sms_sender_id:
+        config["smsidea"] = {
+            "username": sms_username,
+            "password": sms_password,
+            "sender_id": sms_sender_id,
+            "peid": os.getenv("SMS_PEID"),
+            "timeout": int(os.getenv("SMS_TIMEOUT", "30")),
         }
 
     # Mock aggregator override
@@ -261,22 +296,15 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
 
 @lru_cache()
 def get_settings() -> Settings:
-    """
-    Get application settings (cached singleton).
-
-    Load order:
-        1. infra/config/{environment}.yaml
-        2. Environment variables (override YAML)
-        3. Startup validation (crashes the process on insecure config)
-
-    Usage:
-        from apps.core.config import get_settings
-        settings = get_settings()
-    """
     environment = os.getenv("ENVIRONMENT", "dev")
     config = _load_yaml(environment)
     config = _apply_env_overrides(config)
     config["environment"] = environment
+    
+    # DEBUG
+    db_cfg = config.get("database", {})
+    print(f"DEBUG_CONFIG: port={db_cfg.get('port')}, user={db_cfg.get('username')}, env_port={os.getenv('DB_PORT')}")
+    
     settings = Settings(**config)
     _validate_settings(settings)
     return settings

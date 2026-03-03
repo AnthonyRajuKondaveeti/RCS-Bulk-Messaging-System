@@ -35,7 +35,7 @@ from apps.core.observability.logging import configure_structlog
 
 configure_structlog(service="worker")
 
-
+logger = logging.getLogger(__name__)
 
 
 def _log(level: str, msg: str, **ctx):
@@ -373,6 +373,7 @@ class CampaignOrchestrator:
             text=rendered_text,
             template_id=template.external_template_id,  # rcssms.in approved template ID
             variables=recipient_variables,               # ordered values for rcssms API
+            rcs_type=getattr(template, 'rcs_type', 'BASIC'),  # BASIC|RICH|RICHCASOUREL
         )
 
     async def _create_messages(

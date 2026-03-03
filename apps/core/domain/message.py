@@ -70,6 +70,8 @@ class MessageContent:
         template_id : approved template ID from rcssms.in (e.g. "7U5QvSVi5e")
         variables   : ordered list of variable values matching template placeholders
                       e.g. template "Hi {{1}}, order {{2}}" -> variables=["John","ORD-1"]
+        rcs_type    : "BASIC", "RICH", or "RICHCASOUREL" — must match the approved
+                      template type registered with rcssms.in. Defaults to "BASIC".
 
     For SMS fallback, to_sms_text() strips rich content to plain text.
     """
@@ -78,6 +80,7 @@ class MessageContent:
     suggestions: List[SuggestedAction] = field(default_factory=list)
     template_id: Optional[str] = None           # rcssms.in approved template ID
     variables: List[Any] = field(default_factory=list)  # ordered variable values
+    rcs_type: str = "BASIC"                     # BASIC | RICH | RICHCASOUREL
 
     def to_sms_text(self) -> str:
         """Convert rich content to plain SMS text (max 1600 chars)."""

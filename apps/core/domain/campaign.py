@@ -332,6 +332,9 @@ class Campaign:
             self.recipient_count += recipient_count
             self.stats.total_recipients = self.recipient_count
             self.updated_at = datetime.now(timezone.utc)
+            
+            # Sync audience_ids to metadata for orchestrator worker
+            self.metadata["audience_ids"] = [str(aid) for aid in self.audience_ids]
     
     def record_message_sent(self) -> None:
         """Record that a message was sent"""

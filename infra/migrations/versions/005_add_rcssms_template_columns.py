@@ -21,8 +21,8 @@ from sqlalchemy import inspect
 
 
 # revision identifiers
-revision = "001_rcssms_template_columns"
-down_revision = "001_initial_schema"
+revision = "005_rcssms_template_columns"
+down_revision = "004_audience_contacts"
 branch_labels = None
 depends_on = None
 

@@ -277,6 +277,11 @@ class AudienceContactModel(Base):
     """
 
     __tablename__ = "audience_contacts"
+    
+    # Exclude updated_at inherited from Base (table doesn't have this column)
+    __mapper_args__ = {
+        "exclude_properties": ["updated_at"]
+    }
 
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),

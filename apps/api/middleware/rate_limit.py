@@ -74,7 +74,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         # Check rate limit
         try:
-            allowed, remaining, reset_time = await self._check_rate_limit(
+            allowed, remaining, reset_time, limit = await self._check_rate_limit(
                 key=rate_limit_key,
                 tenant_id=tenant_id,
             )
@@ -87,13 +87,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return await self._rate_limit_response(
                     remaining=0,
                     reset_time=reset_time,
+                    limit=limit,
                 )
             
             # Process request
             response = await call_next(request)
             
             # Add rate limit headers
-            response.headers["X-RateLimit-Limit"] = str(self.default_limit)
+            response.headers["X-RateLimit-Limit"] = str(limit)
             response.headers["X-RateLimit-Remaining"] = str(remaining)
             response.headers["X-RateLimit-Reset"] = str(reset_time)
             
@@ -108,7 +109,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self,
         key: str,
         tenant_id: UUID,
-    ) -> tuple[bool, int, int]:
+    ) -> tuple[bool, int, int, int]:
         """
         Check if request is within rate limit
         
@@ -117,7 +118,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             tenant_id: Tenant ID for custom limits
             
         Returns:
-            (allowed, remaining, reset_time) tuple
+            (allowed, remaining, reset_time, limit) tuple
         """
         # Get Redis client
         if not self.redis_client and self._redis_available:
@@ -129,7 +130,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         # If Redis unavailable, allow all requests
         if not self.redis_client:
-            return True, self.default_limit, int(time.time() + self.window)
+            return True, self.default_limit, int(time.time() + self.window), self.default_limit
         
         try:
             # Get custom limit for tenant (if exists)
@@ -161,7 +162,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 else:
                     reset_time = int(now + self.window)
                 
-                return False, 0, reset_time
+                return False, 0, reset_time, limit
             
             # Add current request
             request_id = f"{now}:{id(key)}"
@@ -173,23 +174,61 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             remaining = limit - count - 1
             reset_time = int(now + self.window)
             
-            return True, remaining, reset_time
+            return True, remaining, reset_time, limit
             
         except Exception as e:
             logger.error(f"Rate limit check failed: {e}")
             # Fail open
-            return True, self.default_limit, int(time.time() + self.window)
+            return True, self.default_limit, int(time.time() + self.window), self.default_limit
     
     async def _get_tenant_limit(self, tenant_id: UUID) -> int:
         """
         Get custom rate limit for tenant
         
-        TODO: Load from database/config
-        For now, returns default
+        Checks Redis cache first, then database.
+        Falls back to default if no custom limit set.
         """
-        # In production, query tenant settings:
-        # SELECT rate_limit FROM tenants WHERE id = tenant_id
-        return self.default_limit
+        cache_key = f"rate_limit:config:{tenant_id}"
+        
+        # 1. Try Redis cache first to avoid DB hits on every request
+        if self.redis_client:
+            try:
+                cached = await self.redis_client.get(cache_key)
+                if cached is not None:
+                    return int(cached)
+            except Exception as e:
+                logger.warning(f"Rate limit cache read failed for {tenant_id}: {e}")
+
+        # 2. Cache miss or Redis error -> Load from database
+        try:
+            from apps.adapters.db.postgres import get_database
+            from sqlalchemy import text
+            
+            db = get_database()
+            async with db.session() as session:
+                # Query the first active API key for this tenant to get their limit
+                sql = text("SELECT rate_limit FROM api_keys WHERE tenant_id = :tid AND is_active = True LIMIT 1")
+                result = await session.execute(sql, {"tid": tenant_id})
+                row = result.fetchone()
+                
+                limit = self.default_limit
+                if row and hasattr(row, 'rate_limit') and row.rate_limit is not None:
+                    limit = int(row.rate_limit)
+                elif row and row[0] is not None:
+                    limit = int(row[0])
+                
+                # 3. Cache the result for 60 seconds
+                if self.redis_client:
+                    try:
+                        await self.redis_client.setex(cache_key, 60, str(limit))
+                    except Exception as e:
+                        logger.warning(f"Rate limit cache write failed for {tenant_id}: {e}")
+                
+                return limit
+
+        except Exception as e:
+            logger.error(f"Error loading tenant rate limit from DB: {e}")
+            return self.default_limit
     
     def _get_endpoint_key(self, request: Request) -> str:
         """
@@ -215,6 +254,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self,
         remaining: int,
         reset_time: int,
+        limit: int,
     ):
         """Return rate limit exceeded response"""
         from starlette.responses import JSONResponse
@@ -227,7 +267,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 "reset_at": reset_time,
             },
             headers={
-                "X-RateLimit-Limit": str(self.default_limit),
+                "X-RateLimit-Limit": str(limit),
                 "X-RateLimit-Remaining": str(remaining),
                 "X-RateLimit-Reset": str(reset_time),
                 "Retry-After": str(max(1, reset_time - int(time.time()))),
