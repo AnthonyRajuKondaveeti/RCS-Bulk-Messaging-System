@@ -99,6 +99,14 @@ class MessageModel(Base):
         PGUUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=False, index=True
     )
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+    
+    # Parent-child linkage for fallback tracking
+    parent_message_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
 
     recipient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
 
@@ -137,6 +145,14 @@ class MessageModel(Base):
     metadata_: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     campaign: Mapped["CampaignModel"] = relationship(back_populates="messages")
+    
+    # Relationship for parent-child message linkage
+    parent_message: Mapped[Optional["MessageModel"]] = relationship(
+        "MessageModel",
+        remote_side=[id],
+        foreign_keys=[parent_message_id],
+        backref="child_messages"
+    )
 
     __table_args__ = (
         Index("ix_messages_status_created", "status", "created_at"),

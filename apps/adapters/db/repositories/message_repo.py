@@ -165,26 +165,124 @@ class SQLAlchemyMessageRepository(MessageRepository):
         await self.session.flush()
 
     async def get_delivery_stats(self, campaign_id: UUID) -> Dict[str, int]:
-        from sqlalchemy import func
-        stmt = select(
-            func.count(MessageModel.id).label("total"),
-            func.count(MessageModel.id).filter(
-                MessageModel.status == MessageStatus.SENT.value).label("sent"),
-            func.count(MessageModel.id).filter(
-                MessageModel.status == MessageStatus.DELIVERED.value).label("delivered"),
-            func.count(MessageModel.id).filter(
-                MessageModel.status == MessageStatus.FAILED.value).label("failed"),
-            func.count(MessageModel.id).filter(
-                MessageModel.status == MessageStatus.READ.value).label("read"),
-        ).where(MessageModel.campaign_id == campaign_id)
-        result = await self.session.execute(stmt)
-        row = result.one()
+        """
+        Get delivery statistics for campaign with fallback-aware counting.
+        
+        NEW LOGIC (2026-03-03):
+          - Total = count of parent messages only (parent_message_id IS NULL)
+          - Delivered = parent succeeded OR (parent failed + child succeeded)
+          - Failed = parent failed with no successful child
+          - Pending = messages not yet in terminal state
+          
+        This ensures fallback messages are counted correctly:
+          - If RCS delivers → count as delivered
+          - If RCS fails but SMS delivers → count as delivered
+          - If both RCS and SMS fail → count as failed
+          - Child messages don't inflate the "total" count
+        """
+        from sqlalchemy import func, case, and_, or_, exists
+        from sqlalchemy.orm import aliased
+        
+        # Alias for child messages (for join)
+        ChildMessage = aliased(MessageModel)
+        
+        # Base query: only count parent messages (not children)
+        parent_filter = MessageModel.parent_message_id.is_(None)
+        
+        # Count total parent messages
+        total_stmt = select(func.count(MessageModel.id)).where(
+            and_(
+                MessageModel.campaign_id == campaign_id,
+                parent_filter
+            )
+        )
+        total_result = await self.session.execute(total_stmt)
+        total = total_result.scalar() or 0
+        
+        # Count delivered: parent delivered OR parent failed with successful child
+        # Successful = DELIVERED or READ
+        delivered_stmt = select(func.count(MessageModel.id)).where(
+            and_(
+                MessageModel.campaign_id == campaign_id,
+                parent_filter,
+                or_(
+                    # Parent succeeded directly
+                    MessageModel.status.in_([MessageStatus.DELIVERED.value, MessageStatus.READ.value]),
+                    # OR parent failed but has successful child
+                    and_(
+                        MessageModel.status == MessageStatus.FAILED.value,
+                        exists(
+                            select(1)
+                            .where(ChildMessage.parent_message_id == MessageModel.id)
+                            .where(ChildMessage.status.in_([
+                                MessageStatus.DELIVERED.value,
+                                MessageStatus.READ.value
+                            ]))
+                        )
+                    )
+                )
+            )
+        )
+        delivered_result = await self.session.execute(delivered_stmt)
+        delivered = delivered_result.scalar() or 0
+        
+        # Count sent (parent in SENT status, not failed or delivered yet)
+        sent_stmt = select(func.count(MessageModel.id)).where(
+            and_(
+                MessageModel.campaign_id == campaign_id,
+                parent_filter,
+                MessageModel.status == MessageStatus.SENT.value
+            )
+        )
+        sent_result = await self.session.execute(sent_stmt)
+        sent = sent_result.scalar() or 0
+        
+        # Count failed: parent failed with NO successful child
+        failed_stmt = select(func.count(MessageModel.id)).where(
+            and_(
+                MessageModel.campaign_id == campaign_id,
+                parent_filter,
+                MessageModel.status == MessageStatus.FAILED.value,
+                ~exists(
+                    select(1)
+                    .where(ChildMessage.parent_message_id == MessageModel.id)
+                    .where(ChildMessage.status.in_([
+                        MessageStatus.DELIVERED.value,
+                        MessageStatus.READ.value
+                    ]))
+                )
+            )
+        )
+        failed_result = await self.session.execute(failed_stmt)
+        failed = failed_result.scalar() or 0
+        
+        # Count read (parent has READ status OR parent failed with child having READ)
+        read_stmt = select(func.count(MessageModel.id)).where(
+            and_(
+                MessageModel.campaign_id == campaign_id,
+                parent_filter,
+                or_(
+                    MessageModel.status == MessageStatus.READ.value,
+                    and_(
+                        MessageModel.status == MessageStatus.FAILED.value,
+                        exists(
+                            select(1)
+                            .where(ChildMessage.parent_message_id == MessageModel.id)
+                            .where(ChildMessage.status == MessageStatus.READ.value)
+                        )
+                    )
+                )
+            )
+        )
+        read_result = await self.session.execute(read_stmt)
+        read = read_result.scalar() or 0
+        
         return {
-            "total": row.total or 0,
-            "sent": row.sent or 0,
-            "delivered": row.delivered or 0,
-            "failed": row.failed or 0,
-            "read": row.read or 0,
+            "total": total,
+            "sent": sent,
+            "delivered": delivered,
+            "failed": failed,
+            "read": read,
         }
 
     # ------------------------------------------------------------------
@@ -231,6 +329,7 @@ class SQLAlchemyMessageRepository(MessageRepository):
             status=MessageStatus(model.status),
             channel=MessageChannel(model.channel),
             priority=model.priority,
+            parent_message_id=model.parent_message_id,  # NEW: Map parent linkage
             created_at=model.created_at,
         )
 
@@ -299,6 +398,7 @@ class SQLAlchemyMessageRepository(MessageRepository):
             id=message.id,
             campaign_id=message.campaign_id,
             tenant_id=message.tenant_id,
+            parent_message_id=message.parent_message_id,  # NEW: Map parent linkage
             recipient_phone=message.recipient_phone,
             status=message.status.value,
             channel=message.channel.value,
@@ -326,6 +426,7 @@ class SQLAlchemyMessageRepository(MessageRepository):
         """Update mutable fields on existing ORM model."""
         model.status = message.status.value
         model.channel = message.channel.value
+        model.parent_message_id = message.parent_message_id  # NEW: Update parent linkage
         model.queued_at = message.queued_at
         model.sent_at = message.sent_at
         model.delivered_at = message.delivered_at

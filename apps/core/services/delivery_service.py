@@ -212,7 +212,7 @@ class DeliveryService:
 
                     if not rcs_capable:
                         logger.info(
-                            "Recipient not RCS capable — triggering SMS fallback",
+                            "Recipient not RCS capable — marking failed and creating SMS fallback",
                             extra={
                                 "message_id": str(message_id),
                                 "recipient": message.recipient_phone,
@@ -224,7 +224,9 @@ class DeliveryService:
                             error_message="RCS not supported",
                         )
                         await self.uow.messages.save(message)
-                        await self._queue_fallback(message)
+                        await self._handle_fallback_inline(message)
+                        # Recalculate stats after fallback
+                        await self.uow.campaigns.recalculate_stats(message.campaign_id)
                         return
 
                     logger.info(
@@ -265,10 +267,9 @@ class DeliveryService:
                         "step": "sent",
                     },
                 )
-
-                await self.uow.campaigns.update_stats(
-                    message.campaign_id, {"messages_sent": 1}
-                )
+                
+                # Recalculate campaign stats after message sent
+                await self.uow.campaigns.recalculate_stats(message.campaign_id)
 
             except RateLimitException as e:
                 logger.warning(
@@ -341,14 +342,8 @@ class DeliveryService:
 
             if status == "delivered":
                 message.mark_delivered()
-                await self.uow.campaigns.update_stats(
-                    message.campaign_id, {"messages_delivered": 1}
-                )
             elif status == "read":
                 message.mark_read()
-                await self.uow.campaigns.update_stats(
-                    message.campaign_id, {"messages_read": 1}
-                )
             elif status == "failed":
                 message.mark_failed(
                     reason=FailureReason.NETWORK_ERROR,
@@ -364,10 +359,13 @@ class DeliveryService:
                         "step": "dlr_failed",
                     },
                 )
-                if message.should_fallback_to_sms():
-                    await self._queue_fallback(message)
+                if message.should_trigger_fallback():
+                    await self._handle_fallback_inline(message)
 
             await self.uow.messages.save(message)
+            
+            # Recalculate campaign stats after terminal state change
+            await self.uow.campaigns.recalculate_stats(message.campaign_id)
 
     async def _check_rcs_capability(self, phone_number: str) -> bool:
         """Check if phone number is RCS capable."""
@@ -448,42 +446,45 @@ class DeliveryService:
         ]
         await self.queue.enqueue_batch(queue_messages)
 
-    async def _queue_fallback(self, message: Message) -> None:
+    async def _handle_fallback_inline(self, message: Message) -> None:
         """
-        Queue message for SMS fallback.
-
-        BUG FIX: Previously called _queue_message_for_delivery() which pushed
-        to the 'message_dispatcher' queue.  The dispatcher uses RcsSmsAdapter
-        (RCS-only) so the fallback message would be re-sent as RCS — defeating
-        the entire purpose of the fallback.
-
-        The correct queue is 'fallback_handler', consumed exclusively by
-        SMSFallbackWorker which uses SmsIdeaAdapter (smsidea.co.in).
+        Handle SMS fallback inline (NEW ARCHITECTURE).
+        
+        Creates a NEW SMS message linked to the parent instead of modifying
+        the existing message. This fixes the FAILED → PENDING state violation.
+        
+        Parent message stays FAILED (terminal), child message starts fresh.
         """
-        from apps.core.config import get_settings
-
-        settings = get_settings()
-
-        message.trigger_fallback()
-        await self.uow.messages.save(message)
-
-        await self.queue.enqueue(
-            QueueMessage(
-                id=str(message.id),
-                queue_name=settings.queue_names["fallback_handler"],
-                payload={"message_id": str(message.id)},
-                priority=self._map_priority(message.priority),
+        if not message.should_trigger_fallback():
+            logger.warning(
+                "Fallback not triggered - conditions not met",
+                extra={
+                    "message_id": str(message.id),
+                    "status": message.status.value,
+                    "channel": message.channel.value,
+                    "step": "fallback_check",
+                },
             )
-        )
-
+            return
+        
+        # Create NEW SMS message (doesn't modify parent)
+        fallback_message = message.create_fallback_message()
+        
+        # Save child message
+        await self.uow.messages.save(fallback_message)
+        
+        # Queue child for delivery (standard dispatcher queue)
+        await self._queue_message_for_delivery(fallback_message)
+        
         logger.info(
-            "SMS fallback queued",
+            "SMS fallback message created and queued",
             extra={
-                "message_id": str(message.id),
+                "parent_message_id": str(message.id),
+                "fallback_message_id": str(fallback_message.id),
                 "recipient": message.recipient_phone,
                 "failure_reason": str(message.failure_reason),
-                "queue": settings.queue_names["fallback_handler"],
-                "step": "fallback_queued",
+                "channel": "SMS",
+                "step": "fallback_created",
             },
         )
 
@@ -514,10 +515,24 @@ class DeliveryService:
         message: Message,
         exception: Exception,
     ) -> None:
-        """Handle delivery failure and decide on retry/fallback."""
+        """
+        Handle delivery failure and decide on retry/fallback.
+        
+        NEW: Creates child fallback message instead of modifying parent.
+        """
         error_code = getattr(exception, "error_code", "UNKNOWN")
+        
+        # Determine failure reason from exception type
+        failure_reason = FailureReason.NETWORK_ERROR
+        if hasattr(exception, "error_code"):
+            # Map specific error codes to failure reasons
+            if "rcs" in error_code.lower():
+                failure_reason = FailureReason.RCS_NOT_SUPPORTED
+            elif "aggregator" in error_code.lower():
+                failure_reason = FailureReason.AGGREGATOR_ERROR
+        
         message.mark_failed(
-            reason=FailureReason.NETWORK_ERROR,
+            reason=failure_reason,
             error_code=error_code,
             error_message=str(exception),
         )
@@ -536,10 +551,17 @@ class DeliveryService:
                     "step": "retry_queued",
                 },
             )
-        elif message.should_fallback_to_sms():
-            await self._queue_fallback(message)
+        elif message.should_trigger_fallback():
+            # Save parent as FAILED first
+            await self.uow.messages.save(message)
+            # Create and queue child fallback message
+            await self._handle_fallback_inline(message)
+            # Recalculate stats after fallback
+            await self.uow.campaigns.recalculate_stats(message.campaign_id)
         else:
             await self.uow.messages.save(message)
+            # Recalculate stats for permanent failure
+            await self.uow.campaigns.recalculate_stats(message.campaign_id)
             logger.error(
                 "Message permanently failed — no retry or fallback possible",
                 extra={
@@ -547,6 +569,7 @@ class DeliveryService:
                     "recipient": message.recipient_phone,
                     "retry_count": message.retry_count,
                     "error_code": error_code,
+                    "failure_reason": message.failure_reason.value if message.failure_reason else None,
                     "step": "permanently_failed",
                 },
             )

@@ -187,14 +187,14 @@ async def main():
             
             template = Template.create(
                 tenant_id=tenant_id,
-                name="E2E Test Template - 20 Numbers",
+                name="E2E Test Template - 100 Numbers",
                 content="Hello {{name}}, this is test message #{{test_id}}!",
                 variables=["name", "test_id"],
             )
             
             # Mock: auto-approve
             if use_mock:
-                template.approve_template("mock-template-e2e-20")
+                template.approve_template("mock-template-e2e-100")
             
             await uow.templates.save(template)
             await uow.commit()  # Commit changes before session closes
@@ -208,12 +208,12 @@ async def main():
         # ──────────────────────────────────────────────────────────────────
         # STEP 3: Create Audience with 25 contacts
         # ──────────────────────────────────────────────────────────────────
-        print_section("STEP 3: Creating Audience with 25 Test Contacts")
+        print_section("STEP 3: Creating Audience with 100 Test Contacts")
         
         # Generate 25 test phone numbers
         test_contacts = []
-        for i in range(25):
-            phone = f"+91987654{i:04d}"  # +919876540000 to +919876540024
+        for i in range(100):
+            phone = f"+91987654{i:04d}"  # +919876540000 to +919876540099
             variables = {
                 "name": f"Test User {i+1}",
                 "test_id": str(i+1)
@@ -228,7 +228,7 @@ async def main():
             
             audience = Audience.create(
                 tenant_id=tenant_id,
-                name="E2E Test Audience - 25 Numbers",
+                name="E2E Test Audience - 100 Numbers",
             )
             audience.add_contacts(test_contacts)
             await uow.audiences.save(audience)
@@ -257,7 +257,7 @@ async def main():
             
             campaign = await campaign_service.create_campaign(
                 tenant_id=tenant_id,
-                name="E2E Test Campaign - 25 Numbers",
+                name="E2E Test Campaign - 100 Numbers",
                 template_id=template_id,
                 campaign_type=CampaignType.PROMOTIONAL,
                 priority=Priority.HIGH,

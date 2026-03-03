@@ -96,7 +96,7 @@ Add-Content .env "USE_MOCK_AGGREGATOR=true"
 # Terminal 2 - Orchestrator Worker
 .\venv\Scripts\python.exe -m apps.workers.entrypoints.orchestrator
 
-# Terminal 3 - Dispatcher Worker  
+# Terminal 3 - Dispatcher Worker
 .\venv\Scripts\python.exe -m apps.workers.entrypoints.dispatcher
 
 # Terminal 4 - Webhook Worker
@@ -116,11 +116,11 @@ Add-Content .env "USE_MOCK_AGGREGATOR=true"
 # ╔════════════════════════════════════════════════════════════════════╗
 # ║                  🧪 RCS PLATFORM LOCAL TESTS                      ║
 # ╚════════════════════════════════════════════════════════════════════╝
-# 
+#
 # TEST 1: Domain Models
 # ✅ Campaign created: ...
 # ✅ Domain model tests PASSED!
-# 
+#
 # TEST 2: Services with Mock Adapter
 # ✅ Database connected
 # ✅ Queue connected
@@ -330,7 +330,7 @@ print(f'  Mock enabled: {settings.aggregator.use_mock}')
 # It will ask for confirmation:
 # ⚠️  Using REAL RCS AGGREGATOR (messages will be sent!)
 #    RCS Username: your_username
-# 
+#
 #    Continue? (yes/no): yes
 ```
 
@@ -551,7 +551,7 @@ while ($true) {
     Clear-Host
     Write-Host "Message Processing Status - $(Get-Date -Format 'HH:mm:ss')"
     Write-Host "="*60
-    
+
     .\venv\Scripts\python.exe -c "
 import asyncio
 from apps.adapters.db.postgres import get_database
@@ -574,7 +574,7 @@ async def show():
 
 asyncio.run(show())
 "
-    
+
     Start-Sleep -Seconds 2
 }
 ```

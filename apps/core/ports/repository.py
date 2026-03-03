@@ -164,6 +164,21 @@ class CampaignRepository(Repository[Campaign]):
         pass
     
     @abstractmethod
+    async def recalculate_stats(
+        self,
+        campaign_id: UUID,
+    ) -> None:
+        """
+        Recalculate campaign statistics from message table.
+        Uses SELECT FOR UPDATE to prevent race conditions.
+        Transitions to COMPLETED if all messages are terminal.
+        
+        Args:
+            campaign_id: Campaign to update
+        """
+        pass
+    
+    @abstractmethod
     async def search(
         self,
         tenant_id: UUID,

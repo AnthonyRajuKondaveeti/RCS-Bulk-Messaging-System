@@ -30,7 +30,8 @@ from typing import Dict, Optional
 from apps.workers.orchestrator.campaign_orchestrator import CampaignOrchestrator
 from apps.workers.dispatcher.message_dispatcher import MessageDispatcher
 from apps.workers.events.webhook_processor import WebhookProcessor
-from apps.workers.fallback.sms_fallback_worker import SMSFallbackWorker
+# REMOVED: SMS Fallback Worker (fallback now handled inline in DeliveryService)
+# from apps.workers.fallback.sms_fallback_worker import SMSFallbackWorker
 
 
 from apps.core.observability.logging import configure_structlog
@@ -66,13 +67,14 @@ WORKER_CONFIGS = {
         },
         "description": "Webhook Processor",
     },
-    "fallback_worker": {
-        "cls": SMSFallbackWorker,
-        "kwargs": {
-            "concurrency": int(os.getenv("FALLBACK_CONCURRENCY", "5")),
-        },
-        "description": "SMS Fallback Worker",
-    },
+    # REMOVED: Fallback worker - fallback now happens inline (no separate worker needed)
+    # "fallback_worker": {
+    #     "cls": SMSFallbackWorker,
+    #     "kwargs": {
+    #         "concurrency": int(os.getenv("FALLBACK_CONCURRENCY", "5")),
+    #     },
+    #     "description": "SMS Fallback Worker",
+    # },
 }
 
 RESTART_BACKOFF_SECONDS = 5

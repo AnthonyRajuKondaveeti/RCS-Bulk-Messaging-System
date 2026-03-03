@@ -65,9 +65,9 @@ class CampaignStats:
     @property
     def delivery_rate(self) -> float:
         """Calculate delivery success rate"""
-        if self.messages_sent == 0:
+        if self.total_recipients == 0:
             return 0.0
-        return (self.messages_delivered / self.messages_sent) * 100
+        return (self.messages_delivered / self.total_recipients) * 100
     
     @property
     def read_rate(self) -> float:
@@ -336,35 +336,59 @@ class Campaign:
             # Sync audience_ids to metadata for orchestrator worker
             self.metadata["audience_ids"] = [str(aid) for aid in self.audience_ids]
     
-    def record_message_sent(self) -> None:
-        """Record that a message was sent"""
-        self.stats.messages_sent += 1
+    def update_stats_from_db(self, stats_data: Dict[str, Any]) -> bool:
+        """
+        Update campaign statistics from database aggregation.
+        Returns True if campaign transitions to COMPLETED.
+        
+        Terminal states: SENT, DELIVERED, READ, FAILED
+        Non-terminal: PENDING, QUEUED
+        
+        Campaign completes when:
+        - Status is ACTIVE
+        - has_pending = False (all messages in terminal states)
+        - recipient_count > 0
+        
+        Args:
+            stats_data: Dict with keys:
+                - messages_sent: int (SENT or higher)
+                - messages_delivered: int (DELIVERED or READ)
+                - messages_failed: int (terminal FAILED)
+                - messages_read: int (READ)
+                - fallback_triggered: int
+                - has_pending: bool (True if any PENDING/QUEUED)
+        
+        Returns:
+            True if campaign completed, False otherwise
+        """
+        self.stats.messages_sent = stats_data.get("messages_sent", 0)
+        self.stats.messages_delivered = stats_data.get("messages_delivered", 0)
+        self.stats.messages_failed = stats_data.get("messages_failed", 0)
+        self.stats.messages_read = stats_data.get("messages_read", 0)
+        self.stats.fallback_triggered = stats_data.get("fallback_triggered", 0)
         self.updated_at = datetime.now(timezone.utc)
-    
-    def record_message_delivered(self) -> None:
-        """Record successful delivery"""
-        self.stats.messages_delivered += 1
-        self.updated_at = datetime.now(timezone.utc)
-    
-    def record_message_failed(self) -> None:
-        """Record delivery failure"""
-        self.stats.messages_failed += 1
-        self.updated_at = datetime.now(timezone.utc)
-    
-    def record_message_read(self) -> None:
-        """Record message read receipt"""
-        self.stats.messages_read += 1
-        self.updated_at = datetime.now(timezone.utc)
-    
-    def record_fallback(self) -> None:
-        """Record fallback to SMS"""
-        self.stats.fallback_triggered += 1
-        self.updated_at = datetime.now(timezone.utc)
-    
-    def record_opt_out(self) -> None:
-        """Record recipient opt-out"""
-        self.stats.opt_outs += 1
-        self.updated_at = datetime.now(timezone.utc)
+        
+        # Completion check: zero pending messages = all terminal
+        has_pending = stats_data.get("has_pending", True)
+        is_active = self.status == CampaignStatus.ACTIVE
+        all_terminal = not has_pending
+        
+        if is_active and all_terminal and self.recipient_count > 0:
+            self.status = CampaignStatus.COMPLETED
+            self._add_event(
+                event_type="campaign.completed",
+                data={
+                    "stats": {
+                        "sent": self.stats.messages_sent,
+                        "delivered": self.stats.messages_delivered,
+                        "failed": self.stats.messages_failed,
+                        "delivery_rate": self.stats.delivery_rate,
+                    }
+                }
+            )
+            return True
+        
+        return False
     
     def is_active(self) -> bool:
         """Check if campaign is currently active"""

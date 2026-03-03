@@ -248,6 +248,232 @@ class SQLAlchemyCampaignRepository(CampaignRepository):
             
             logger.debug(f"Updated stats for campaign {campaign_id}: {stats_update}")
     
+    async def recalculate_stats(
+        self,
+        campaign_id: UUID,
+    ) -> None:
+        """
+        Recalculate campaign statistics from message table.
+        
+        Uses SELECT FOR UPDATE to prevent race conditions.
+        Treats SENT, DELIVERED, READ, FAILED as terminal states.
+        Transitions campaign ACTIVE → COMPLETED when all messages terminal.
+        
+        Terminal states: SENT, DELIVERED, READ, FAILED
+        Non-terminal: PENDING, QUEUED
+        
+        Completion condition: Zero messages in PENDING/QUEUED state.
+        Does NOT require DELIVERED status for campaign completion.
+        SENT is sufficient for completion (e.g., mock mode, no delivery receipts).
+        
+        Args:
+            campaign_id: Campaign ID
+        """
+        from sqlalchemy import func, case, or_, exists, and_
+        from sqlalchemy.orm import aliased
+        from apps.adapters.db.models import MessageModel
+        from apps.core.domain.message import MessageStatus
+        
+        # Lock campaign row to prevent concurrent updates
+        stmt = select(CampaignModel).where(
+            CampaignModel.id == campaign_id
+        ).with_for_update()
+        result = await self.session.execute(stmt)
+        campaign_model = result.scalar_one_or_none()
+        
+        if not campaign_model:
+            logger.error(f"Campaign {campaign_id} not found")
+            return
+        
+        # Alias for child messages (fallback)
+        ChildMessage = aliased(MessageModel)
+        
+        # Terminal states: SENT, DELIVERED, READ, FAILED
+        # Non-terminal states: PENDING, QUEUED
+        # Campaign completes when ALL messages are in terminal states
+        
+        # Query: Count distinct recipients by outcome
+        # Per recipient:
+        #   - sent: at least one message reached SENT or better
+        #   - delivered: at least one message reached DELIVERED or READ
+        #   - failed: parent FAILED with no successful child
+        #   - read: at least one message reached READ
+        #   - pending: any message still in PENDING/QUEUED (NOT terminal)
+        
+        # Subquery to get per-recipient outcomes
+        recipient_stats = select(
+            MessageModel.recipient_phone,
+            # SENT: Message reached SENT or higher (SENT/DELIVERED/READ are terminal)
+            func.max(
+                case(
+                    (
+                        or_(
+                            MessageModel.status.in_([
+                                MessageStatus.SENT.value,
+                                MessageStatus.DELIVERED.value,
+                                MessageStatus.READ.value
+                            ]),
+                            # OR parent failed but child succeeded
+                            exists(
+                                select(1)
+                                .where(ChildMessage.parent_message_id == MessageModel.id)
+                                .where(ChildMessage.status.in_([
+                                    MessageStatus.SENT.value,
+                                    MessageStatus.DELIVERED.value,
+                                    MessageStatus.READ.value
+                                ]))
+                            )
+                        ),
+                        1
+                    ),
+                    else_=0
+                )
+            ).label("has_sent"),
+            # DELIVERED: Message reached DELIVERED or READ
+            func.max(
+                case(
+                    (
+                        or_(
+                            MessageModel.status.in_([
+                                MessageStatus.DELIVERED.value,
+                                MessageStatus.READ.value
+                            ]),
+                            # OR parent failed but child delivered
+                            exists(
+                                select(1)
+                                .where(ChildMessage.parent_message_id == MessageModel.id)
+                                .where(ChildMessage.status.in_([
+                                    MessageStatus.DELIVERED.value,
+                                    MessageStatus.READ.value
+                                ]))
+                            )
+                        ),
+                        1
+                    ),
+                    else_=0
+                )
+            ).label("has_delivered"),
+            # Has read message
+            func.max(
+                case(
+                    (
+                        or_(
+                            MessageModel.status == MessageStatus.READ.value,
+                            exists(
+                                select(1)
+                                .where(ChildMessage.parent_message_id == MessageModel.id)
+                                .where(ChildMessage.status == MessageStatus.READ.value)
+                            )
+                        ),
+                        1
+                    ),
+                    else_=0
+                )
+            ).label("has_read"),
+            # Failed (parent failed AND no child exists OR all children are terminal FAILED)
+            func.max(
+                case(
+                    (
+                        and_(
+                            MessageModel.status == MessageStatus.FAILED.value,
+                            MessageModel.parent_message_id.is_(None),
+                            ~exists(
+                                select(1)
+                                .where(ChildMessage.parent_message_id == MessageModel.id)
+                                .where(ChildMessage.status != MessageStatus.FAILED.value)
+                            )
+                        ),
+                        1
+                    ),
+                    else_=0
+                )
+            ).label("has_failed"),
+            # Has non-terminal messages (PENDING or QUEUED only)
+            # SENT, DELIVERED, READ, FAILED are ALL terminal states
+            # Campaign completes when this returns 0 (no pending messages)
+            func.max(
+                case(
+                    (
+                        or_(
+                            MessageModel.status.in_([
+                                MessageStatus.PENDING.value,
+                                MessageStatus.QUEUED.value
+                            ]),
+                            exists(
+                                select(1)
+                                .where(ChildMessage.parent_message_id == MessageModel.id)
+                                .where(ChildMessage.status.in_([
+                                    MessageStatus.PENDING.value,
+                                    MessageStatus.QUEUED.value
+                                ]))
+                            )
+                        ),
+                        1
+                    ),
+                    else_=0
+                )
+            ).label("has_pending")
+        ).where(
+            and_(
+                MessageModel.campaign_id == campaign_id,
+                MessageModel.parent_message_id.is_(None)  # Only count parent messages
+            )
+        ).group_by(MessageModel.recipient_phone).subquery()
+        
+        # Aggregate across all recipients
+        aggregation = select(
+            func.sum(recipient_stats.c.has_sent).label("messages_sent"),
+            func.sum(recipient_stats.c.has_delivered).label("messages_delivered"),
+            func.sum(recipient_stats.c.has_failed).label("messages_failed"),
+            func.sum(recipient_stats.c.has_read).label("messages_read"),
+            func.max(recipient_stats.c.has_pending).label("has_pending")
+        )
+        
+        agg_result = await self.session.execute(aggregation)
+        agg_row = agg_result.one()
+        
+        # Count fallback messages (child messages with parent_message_id)
+        fallback_stmt = select(
+            func.count(MessageModel.id)
+        ).where(
+            and_(
+                MessageModel.campaign_id == campaign_id,
+                MessageModel.parent_message_id.isnot(None)
+            )
+        )
+        fallback_result = await self.session.execute(fallback_stmt)
+        fallback_count = fallback_result.scalar() or 0
+        
+        # Build stats: has_pending = False triggers campaign completion
+        # Campaign completes when: ACTIVE + !has_pending + recipient_count > 0
+        # SENT is sufficient for completion (does not require DELIVERED)
+        stats_data = {
+            "messages_sent": agg_row.messages_sent or 0,
+            "messages_delivered": agg_row.messages_delivered or 0,
+            "messages_failed": agg_row.messages_failed or 0,
+            "messages_read": agg_row.messages_read or 0,
+            "fallback_triggered": fallback_count,
+            "has_pending": bool(agg_row.has_pending)
+        }
+        
+        # Convert to domain and update
+        campaign = self._to_domain(campaign_model)
+        completed = campaign.update_stats_from_db(stats_data)
+        
+        # Update model from domain
+        await self._update_from_domain(campaign_model, campaign)
+        await self.session.flush()
+        
+        if completed:
+            logger.info(
+                f"Campaign {campaign_id} completed: "
+                f"sent={stats_data['messages_sent']}, "
+                f"delivered={stats_data['messages_delivered']}, "
+                f"failed={stats_data['messages_failed']}"
+            )
+        else:
+            logger.debug(f"Campaign {campaign_id} stats updated: {stats_data}")
+    
     async def search(
         self,
         tenant_id: UUID,

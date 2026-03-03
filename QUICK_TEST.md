@@ -19,16 +19,19 @@ docker-compose up -d postgres redis rabbitmq
 ## Run End-to-End Test (3 Terminals)
 
 ### Terminal 1 - API Server
+
 ```powershell
 .\venv\Scripts\uvicorn.exe apps.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### Terminal 2 - Workers
+
 ```powershell
 .\venv\Scripts\python.exe -m apps.workers.manager
 ```
 
 ### Terminal 3 - Test Script
+
 ```powershell
 .\venv\Scripts\python.exe tests\test_e2e_20_numbers.py
 ```
@@ -64,21 +67,24 @@ docker-compose up -d postgres redis rabbitmq
 
 ▶ STEP 7: Final Results
    📊 Messages delivered: 24/25 (96%)
-   
+
 ✅ END-TO-END TEST COMPLETE
 ```
 
 ## Troubleshooting
 
 **If messages stay PENDING:**
+
 - Make sure Terminal 2 (workers) is running
 - Check: http://localhost:15672 (RabbitMQ - guest/guest)
 
 **If "connection refused":**
+
 - Verify services: `docker ps`
 - Should see: rcs-postgres, rcs-redis, rcs-rabbitmq (all healthy)
 
 **If "database not migrated":**
+
 - Run: `.\venv\Scripts\alembic.exe upgrade head`
 
 ## Check Results in Database
@@ -103,7 +109,7 @@ async def show_results():
                 status, count = row
                 icon = {'PENDING':'⏸️','SENT':'✅','DELIVERED':'✅','FAILED':'❌'}.get(status, ' ')
                 print(f'  {icon} {status}: {count}')
-            
+
             # Show campaigns
             result = await session.execute(
                 text('SELECT id, name, status, recipient_count FROM campaigns ORDER BY created_at DESC LIMIT 5')
@@ -121,6 +127,7 @@ asyncio.run(show_results())
 ## Switch to Real RCS (When Ready)
 
 1. Edit `.env`:
+
 ```env
 USE_MOCK_AGGREGATOR=false
 RCS_USERNAME=your_username
