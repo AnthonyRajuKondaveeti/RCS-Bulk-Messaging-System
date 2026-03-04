@@ -1,11 +1,7 @@
-"""
-Application Configuration — single source of truth.
+"""Application Configuration — single source of truth.
 
-FIX: Replaced GupshupConfig with RcsSmsConfig.
-     default_aggregator changed to "rcssms".
-     apps/config.py (old file) must be DELETED or left unused.
-
-All workers and API code import from apps.core.config — never from apps.config.
+The system uses rcssms.in as the RCS aggregator and smsidea.co.in 
+for SMS fallback. All workers and API code import from apps.core.config.
 """
 
 from functools import lru_cache
@@ -88,6 +84,19 @@ class RcsSmsConfig(BaseModel):
     use_bearer: bool = True
     timeout: int = 30
     use_mock: bool = False
+    # API endpoint URLs (configurable via env vars)
+    send_url: str = Field(
+        default="https://web.rcssms.in/rcsapi/jsonapi.jsp?apitype=1",
+        description="RCS message sending endpoint"
+    )
+    token_url: str = Field(
+        default="https://web.rcssms.in/api/rcs/accesstoken",
+        description="Bearer token endpoint"
+    )
+    template_url: str = Field(
+        default="https://web.rcssms.in/rcsapi/rcscreatetemplate.jsp",
+        description="Template creation endpoint"
+    )
 
 
 class SmsIdeaConfig(BaseModel):
@@ -97,6 +106,15 @@ class SmsIdeaConfig(BaseModel):
     sender_id: str = Field(..., description="6-char DLT-approved sender ID (e.g. MYBRND)")
     peid: Optional[str] = Field(None, description="Principal Entity ID from DLT portal")
     timeout: int = 30
+    # API endpoint URLs (configurable via env vars)
+    send_url: str = Field(
+        default="https://smsidea.co.in/smsstatuswithid.aspx",
+        description="SMS sending endpoint"
+    )
+    balance_url: str = Field(
+        default="https://smsidea.co.in/sms/api/getbalance.aspx",
+        description="Balance check endpoint"
+    )
 
 
 class ObservabilityConfig(BaseModel):
@@ -165,7 +183,7 @@ class Settings(BaseSettings):
     redis: RedisConfig = RedisConfig()
     rabbitmq: RabbitMQConfig = RabbitMQConfig()
 
-    # Aggregator — rcssms.in only; Gupshup removed
+    # RCS aggregator configuration
     rcssms: Optional[RcsSmsConfig] = None
     # SMS fallback provider (smsidea.co.in)
     smsidea: Optional[SmsIdeaConfig] = None
@@ -242,7 +260,7 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
     rcs_password = os.getenv("RCS_PASSWORD")
     rcs_id = os.getenv("RCS_ID")
     if rcs_username and rcs_password and rcs_id:
-        config["rcssms"] = {
+        rcs_config = {
             "username": rcs_username,
             "password": rcs_password,
             "rcs_id": rcs_id,
@@ -251,19 +269,33 @@ def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
             "timeout": int(os.getenv("RCS_TIMEOUT", "30")),
             "use_mock": os.getenv("USE_MOCK_AGGREGATOR", "false").lower() == "true",
         }
+        # Optional URL overrides
+        if os.getenv("RCS_SEND_URL"):
+            rcs_config["send_url"] = os.getenv("RCS_SEND_URL")
+        if os.getenv("RCS_TOKEN_URL"):
+            rcs_config["token_url"] = os.getenv("RCS_TOKEN_URL")
+        if os.getenv("RCS_TEMPLATE_URL"):
+            rcs_config["template_url"] = os.getenv("RCS_TEMPLATE_URL")
+        config["rcssms"] = rcs_config
 
     # smsidea.co.in SMS fallback aggregator
     sms_username = os.getenv("SMS_USERNAME")
     sms_password = os.getenv("SMS_PASSWORD")
     sms_sender_id = os.getenv("SMS_SENDER_ID")
     if sms_username and sms_password and sms_sender_id:
-        config["smsidea"] = {
+        sms_config = {
             "username": sms_username,
             "password": sms_password,
             "sender_id": sms_sender_id,
             "peid": os.getenv("SMS_PEID"),
             "timeout": int(os.getenv("SMS_TIMEOUT", "30")),
         }
+        # Optional URL overrides
+        if os.getenv("SMS_SEND_URL"):
+            sms_config["send_url"] = os.getenv("SMS_SEND_URL")
+        if os.getenv("SMS_BALANCE_URL"):
+            sms_config["balance_url"] = os.getenv("SMS_BALANCE_URL")
+        config["smsidea"] = sms_config
 
     # Mock aggregator override
     if os.getenv("USE_MOCK_AGGREGATOR"):

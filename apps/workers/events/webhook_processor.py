@@ -1,10 +1,7 @@
-"""
-Webhook Processor Worker
-
-FIX: Removed import of GupshupAdapter. Now uses AggregatorFactory which
-     returns RcsSmsAdapter (or MockAdapter) based on settings.
+"""Webhook Processor Worker
 
 Consumes webhook.process queue and calls DeliveryService.handle_delivery_status_update().
+Uses AggregatorFactory which returns RcsSmsAdapter (or MockAdapter) based on settings.
 """
 
 import asyncio

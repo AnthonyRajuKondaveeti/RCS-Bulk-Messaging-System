@@ -65,6 +65,9 @@ class AggregatorFactory:
                 client_secret=settings.rcssms.client_secret,
                 use_bearer=settings.rcssms.use_bearer,
                 timeout=settings.rcssms.timeout,
+                send_url=settings.rcssms.send_url,
+                token_url=settings.rcssms.token_url,
+                template_url=settings.rcssms.template_url,
             )
 
         logger.error("❌ No RCS aggregator configured and MOCK is disabled")
@@ -114,6 +117,8 @@ class AggregatorFactory:
                 sender_id=settings.smsidea.sender_id,
                 peid=settings.smsidea.peid,
                 timeout=settings.smsidea.timeout,
+                send_url=settings.smsidea.send_url,
+                balance_url=settings.smsidea.balance_url,
             )
 
         logger.warning(

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""
-Local Testing Script
+"""Local Testing Script
 
 Tests the RCS platform with mock adapter (no real messages sent).
-This is safe to run anytime - no Gupshup account needed!
+This is safe to run anytime - no rcssms.in account needed!
 
 Usage:
     python tests/local/test_local.py
@@ -347,7 +346,7 @@ async def main():
     print("╚" + "="*68 + "╝")
     
     print("\nℹ️  These tests use MOCK adapter - no real messages sent!")
-    print("ℹ️  Safe to run anytime - no Gupshup account needed\n")
+    print("ℹ️  Safe to run anytime - no rcssms.in account needed\n")
     
     # Setup logging to file
     setup_logging(
@@ -373,7 +372,7 @@ async def main():
         
         print("📝 Next steps:")
         print("   1. Try Postman tests (see TESTING.md)")
-        print("   2. Run with real Gupshup (add credentials to .env)")
+        print("   2. Run with real rcssms.in (add credentials to .env)")
         print("   3. Deploy to production!\n")
         
         return 0

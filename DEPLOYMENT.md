@@ -3,6 +3,7 @@
 ## 🎉 You Now Have a FULLY FUNCTIONAL RCS Platform!
 
 All 4 workers are complete. Your platform can now:
+
 - ✅ Create campaigns via API
 - ✅ Send RCS messages with rich content
 - ✅ Automatically fallback to SMS
@@ -39,10 +40,10 @@ pip install -r requirements.txt
 
 # Setup environment
 cp .env.example .env
-# Edit .env - add your Gupshup credentials:
-#   GUPSHUP_API_KEY=your-key
-#   GUPSHUP_APP_NAME=your-app
-#   GUPSHUP_WEBHOOK_SECRET=your-secret
+# Edit .env - add your rcssms.in credentials:
+#   RCS_USERNAME=your-rcssms-username
+#   RCS_PASSWORD=your-rcssms-password
+#   RCS_ID=your-rcs-bot-id
 
 # Run database migrations
 alembic upgrade head
@@ -84,30 +85,30 @@ import httpx
 
 async def test_campaign():
     base_url = "http://localhost:8000/api/v1"
-    
+
     # 1. Create campaign (via API when routes are wired)
     # For now, test directly with services
-    
+
     from apps.adapters.db.postgres import Database
     from apps.adapters.db.unit_of_work import SQLAlchemyUnitOfWork
     from apps.adapters.queue.rabbitmq import RabbitMQAdapter
     from apps.core.services.campaign_service import CampaignService
     from apps.core.domain.campaign import CampaignType, Priority
     from apps.core.config import get_settings
-    
+
     settings = get_settings()
-    
+
     # Setup
     db = Database()
     await db.connect()
-    
+
     queue = RabbitMQAdapter(url=settings.rabbitmq.url)
     await queue.connect()
-    
+
     async with db.session() as session:
         uow = SQLAlchemyUnitOfWork(session)
         service = CampaignService(uow, queue)
-        
+
         # Create campaign
         tenant_id = uuid4()
         campaign = await service.create_campaign(
@@ -117,19 +118,19 @@ async def test_campaign():
             campaign_type=CampaignType.PROMOTIONAL,
             priority=Priority.HIGH,
         )
-        
+
         print(f"✅ Campaign created: {campaign.id}")
-        
+
         # Activate campaign (triggers orchestrator)
         campaign = await service.activate_campaign(campaign.id)
         print(f"✅ Campaign activated - Status: {campaign.status}")
-        
+
         print("\n📨 Messages will be processed by workers...")
         print("   1. Orchestrator creates messages")
-        print("   2. Dispatcher sends via Gupshup")
+        print("   2. Dispatcher sends via rcssms.in")
         print("   3. Webhook processor handles updates")
         print("   4. Fallback worker handles SMS fallback")
-        
+
     await queue.close()
     await db.disconnect()
 
@@ -138,6 +139,7 @@ if __name__ == "__main__":
 ```
 
 Run it:
+
 ```bash
 python test_end_to_end.py
 ```
@@ -149,6 +151,7 @@ Watch the worker logs to see the entire flow!
 ## 🔍 Monitoring the Flow
 
 ### Worker Logs
+
 ```bash
 # Watch all worker activity
 python -m apps.workers.manager
@@ -157,12 +160,13 @@ python -m apps.workers.manager
 # 📋 Processing campaign {id}
 # ✅ Created 100 messages (100/1000)
 # 📨 Processing message {id}
-# ✅ Message sent via Gupshup
+# ✅ Message sent via rcssms.in
 # 📬 Processing webhook {id}
 # ✅ Message delivered
 ```
 
 ### RabbitMQ Management
+
 ```bash
 # Open RabbitMQ UI
 open http://localhost:15672
@@ -176,20 +180,21 @@ open http://localhost:15672
 ```
 
 ### Database Queries
+
 ```sql
 -- Check campaigns
-SELECT id, name, status, messages_sent, messages_delivered 
-FROM campaigns 
+SELECT id, name, status, messages_sent, messages_delivered
+FROM campaigns
 ORDER BY created_at DESC;
 
 -- Check messages
-SELECT id, status, channel, sent_at, delivered_at 
-FROM messages 
+SELECT id, status, channel, sent_at, delivered_at
+FROM messages
 WHERE campaign_id = 'your-campaign-id'
 ORDER BY created_at DESC;
 
 -- Check delivery stats
-SELECT 
+SELECT
     status,
     channel,
     COUNT(*) as count
@@ -274,6 +279,7 @@ kubectl logs -f deployment/rcs-workers -n rcs-platform
 ## 🧪 Testing Checklist
 
 ### Unit Tests
+
 ```bash
 # Run all tests
 pytest tests/unit/ -v
@@ -283,6 +289,7 @@ pytest tests/unit/ --cov=apps --cov-report=html
 ```
 
 ### Integration Tests
+
 ```bash
 # Test campaign flow
 pytest tests/integration/test_campaign_flow.py -v
@@ -295,6 +302,7 @@ pytest tests/integration/test_api.py -v
 ```
 
 ### Load Tests
+
 ```bash
 # Send 10K messages
 python tests/load/send_10k_messages.py
@@ -311,6 +319,7 @@ python tests/load/send_10k_messages.py
 ## 📊 Performance Tuning
 
 ### Worker Concurrency
+
 ```python
 # Adjust in worker initialization
 dispatcher = MessageDispatcher(concurrency=20)  # 10 -> 20
@@ -318,20 +327,23 @@ webhook_processor = WebhookProcessor(concurrency=50)  # 20 -> 50
 ```
 
 ### Database Connection Pool
+
 ```yaml
 # infra/config/prod.yaml
 database:
-  pool_size: 50  # Increase from 20
+  pool_size: 50 # Increase from 20
   max_overflow: 20
 ```
 
 ### RabbitMQ Prefetch
+
 ```python
 # In RabbitMQ adapter
 await self.channel.set_qos(prefetch_count=20)  # Increase from 10
 ```
 
 ### Rate Limiting
+
 ```python
 # In campaign orchestrator
 orchestrator = CampaignOrchestrator(
@@ -344,6 +356,7 @@ orchestrator = CampaignOrchestrator(
 ## 🚨 Troubleshooting
 
 ### Workers Not Processing
+
 ```bash
 # Check RabbitMQ connection
 python -c "from apps.adapters.queue.rabbitmq import RabbitMQAdapter; import asyncio; asyncio.run(RabbitMQAdapter('amqp://guest:guest@localhost').connect())"
@@ -366,19 +379,20 @@ asyncio.run(check())
 ```
 
 ### Messages Not Sending
+
 ```bash
-# Check Gupshup credentials
+# Check rcssms.in credentials
 python -c "
 import asyncio
-from apps.adapters.aggregators.gupshup_adapter import GupshupAdapter
+from apps.adapters.aggregators.rcssms_adapter import RcsSmsAdapter
 from apps.core.config import get_settings
 
 async def test():
     settings = get_settings()
-    adapter = GupshupAdapter(
-        api_key=settings.gupshup.api_key,
-        app_name=settings.gupshup.app_name,
-        webhook_secret=settings.gupshup.webhook_secret,
+    adapter = RcsSmsAdapter(
+        username=settings.rcssms.username,
+        password=settings.rcssms.password,
+        rcs_id=settings.rcssms.rcs_id,
     )
     balance = await adapter.get_account_balance()
     print(f'Balance: {balance}')
@@ -389,6 +403,7 @@ asyncio.run(test())
 ```
 
 ### Database Issues
+
 ```bash
 # Check migrations
 alembic current
@@ -404,6 +419,7 @@ alembic upgrade head
 ## 📈 Scaling Strategy
 
 ### Horizontal Scaling
+
 ```bash
 # Run multiple worker processes
 python -m apps.workers.dispatcher &  # Process 1
@@ -414,12 +430,14 @@ python -m apps.workers.dispatcher &  # Process 3
 ```
 
 ### Vertical Scaling
+
 ```python
 # Increase concurrency per worker
 MessageDispatcher(concurrency=50)  # More concurrent handlers
 ```
 
 ### Database Sharding
+
 ```python
 # Partition messages table by campaign_id
 # Already has composite indexes for performance
@@ -451,6 +469,7 @@ MessageDispatcher(concurrency=50)  # More concurrent handlers
 ## 🎉 Success Metrics
 
 Your platform is working when you see:
+
 - ✅ Campaigns in ACTIVE status
 - ✅ Messages transitioning: PENDING → SENT → DELIVERED
 - ✅ SMS fallback triggered for failed RCS

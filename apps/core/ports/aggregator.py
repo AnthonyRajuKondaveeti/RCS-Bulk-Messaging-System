@@ -1,14 +1,12 @@
-"""
-Aggregator Port Interface
+"""Aggregator Port Interface
 
 Defines the contract for RCS/SMS aggregator implementations.
-This abstraction allows switching between vendors (Gupshup, Route Mobile, Infobip)
-without changing business logic.
+This abstraction allows switching between vendors without changing business logic.
 
 Implementations:
-    - GupshupAdapter
-    - RouteAdapter
-    - InfobipAdapter
+    - RcsSmsAdapter (rcssms.in) - RCS messaging
+    - SmsIdeaAdapter (smsidea.co.in) - SMS fallback
+    - MockAdapter - Testing/development
     
 Design Pattern: Hexagonal Architecture (Ports & Adapters)
 """
@@ -208,7 +206,7 @@ class AggregatorPort(ABC):
         Get aggregator name
         
         Returns:
-            Aggregator identifier (e.g., "gupshup", "route")
+            Aggregator identifier (e.g., "rcssms", "smsidea", "mock")
         """
         pass
 

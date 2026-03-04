@@ -73,8 +73,6 @@ SMSIDEA_ERROR_CODES: Dict[str, str] = {
 SMS_MAX_LENGTH_NORMAL = 469
 SMS_MAX_LENGTH_UNICODE = 800
 
-SEND_URL = "https://smsidea.co.in/smsstatuswithid.aspx"
-
 
 class SmsIdeaAdapter(AggregatorPort):
     """
@@ -107,22 +105,28 @@ class SmsIdeaAdapter(AggregatorPort):
         sender_id: str,
         peid: Optional[str] = None,
         timeout: int = 30,
+        send_url: str = "https://smsidea.co.in/smsstatuswithid.aspx",
+        balance_url: str = "https://smsidea.co.in/sms/api/getbalance.aspx",
     ) -> None:
         """
         Initialise the smsidea.co.in adapter.
 
         Args:
-            username:  Portal login username (maps to `mobile` param in API)
-            password:  Portal password or API key (maps to `pass` param)
-            sender_id: 6-character DLT-approved sender ID (e.g. "MYBRND")
-            peid:      Principal Entity ID from DLT portal (optional but
-                       strongly recommended for transactional routes)
-            timeout:   HTTP request timeout in seconds
+            username:    Portal login username (maps to `mobile` param in API)
+            password:    Portal password or API key (maps to `pass` param)
+            sender_id:   6-character DLT-approved sender ID (e.g. "MYBRND")
+            peid:        Principal Entity ID from DLT portal (optional but
+                         strongly recommended for transactional routes)
+            timeout:     HTTP request timeout in seconds
+            send_url:    SMS sending endpoint URL
+            balance_url: Balance check endpoint URL
         """
         self.username = username
         self.password = password
         self.sender_id = sender_id
         self.peid = peid
+        self.send_url = send_url
+        self.balance_url = balance_url
         self.timeout = timeout
         self.client = httpx.AsyncClient(timeout=timeout)
 
@@ -185,7 +189,7 @@ class SmsIdeaAdapter(AggregatorPort):
         )
 
         try:
-            response = await self.client.get(SEND_URL, params=params)
+            response = await self.client.get(self.send_url, params=params)
             response.raise_for_status()
             return self._parse_response(response.text, str(request.message_id))
 
@@ -252,12 +256,11 @@ class SmsIdeaAdapter(AggregatorPort):
         """
         Query SMS credit balance from smsidea.co.in.
 
-        Uses the Get Balance API:
-            https://smsidea.co.in/sms/api/getbalance.aspx
+        Uses the Get Balance API endpoint configured in balance_url.
         """
         try:
             response = await self.client.get(
-                "https://smsidea.co.in/sms/api/getbalance.aspx",
+                self.balance_url,
                 params={
                     "mobile": self.username,
                     "pass": self.password,
@@ -401,7 +404,7 @@ class SmsIdeaAdapter(AggregatorPort):
 
 
 # ------------------------------------------------------------------
-# Module-level utilities
+# Module-level utilities 
 # ------------------------------------------------------------------
 
 def _normalise_phone(phone: str) -> str:

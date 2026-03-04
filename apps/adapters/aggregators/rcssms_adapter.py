@@ -77,10 +77,6 @@ class RcsSmsAdapter(AggregatorPort):
         >>> response = await adapter.send_rcs_message(request)
     """
 
-    SEND_URL = "https://web.rcssms.in/rcsapi/jsonapi.jsp?apitype=1"
-    TOKEN_URL = "https://web.rcssms.in/api/rcs/accesstoken"
-    TEMPLATE_URL = "https://web.rcssms.in/rcsapi/rcscreatetemplate.jsp"
-
     def __init__(
         self,
         username: str,
@@ -89,6 +85,9 @@ class RcsSmsAdapter(AggregatorPort):
         client_secret: Optional[str] = None,
         use_bearer: bool = False,
         timeout: int = 30,
+        send_url: str = "https://web.rcssms.in/rcsapi/jsonapi.jsp?apitype=1",
+        token_url: str = "https://web.rcssms.in/api/rcs/accesstoken",
+        template_url: str = "https://web.rcssms.in/rcsapi/rcscreatetemplate.jsp",
     ):
         """
         Initialize rcssms.in adapter
@@ -100,6 +99,9 @@ class RcsSmsAdapter(AggregatorPort):
             client_secret: Client secret for bearer token generation
             use_bearer:    If True, authenticate via bearer token instead of password
             timeout:       HTTP request timeout in seconds
+            send_url:      RCS message sending endpoint URL
+            token_url:     Bearer token endpoint URL
+            template_url:  Template creation endpoint URL
         """
         self.username = username
         self.password = password
@@ -107,6 +109,9 @@ class RcsSmsAdapter(AggregatorPort):
         self.client_secret = client_secret
         self.use_bearer = use_bearer
         self.timeout = timeout
+        self.send_url = send_url
+        self.token_url = token_url
+        self.template_url = template_url
 
         # Bearer token state
         self._bearer_token: Optional[str] = None
@@ -168,7 +173,7 @@ class RcsSmsAdapter(AggregatorPort):
                 )
 
                 response = await self.client.post(
-                    self.SEND_URL,
+                    self.send_url,
                     json=payload,
                     headers=headers,
                 )
@@ -324,7 +329,7 @@ class RcsSmsAdapter(AggregatorPort):
         return "rcssms"
 
     # ------------------------------------------------------------------
-    # Template management (bonus — not in Gupshup adapter)
+    # Template management
     # ------------------------------------------------------------------
 
     async def create_template(
@@ -387,7 +392,7 @@ class RcsSmsAdapter(AggregatorPort):
 
         try:
             response = await self.client.post(
-                self.TEMPLATE_URL,
+                self.template_url,
                 json=payload,
             )
             response.raise_for_status()
@@ -430,7 +435,7 @@ class RcsSmsAdapter(AggregatorPort):
         encoded = base64.b64encode(credentials.encode()).decode()
 
         response = await self.client.post(
-            self.TOKEN_URL,
+            self.token_url,
             headers={
                 "Authorization": f"Basic {encoded}",
                 "Content-Type": "application/json",
