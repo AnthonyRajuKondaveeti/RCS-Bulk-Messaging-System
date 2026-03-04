@@ -231,6 +231,12 @@ class SQLAlchemyCampaignRepository(CampaignRepository):
             campaign_id: Campaign ID
             stats_update: Stats to increment (e.g., {"messages_sent": 1})
         """
+        # Lock campaign row to prevent concurrent updates (deadlock prevention)
+        lock_stmt = select(CampaignModel).where(
+            CampaignModel.id == campaign_id
+        ).with_for_update()
+        await self.session.execute(lock_stmt)
+        
         # Build update statement with increments
         values = {}
         for key, increment in stats_update.items():

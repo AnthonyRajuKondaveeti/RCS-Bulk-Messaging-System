@@ -94,6 +94,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
+    # Log CORS warning if no origins configured
+    if not settings.security.cors_origins:
+        logger.warning(
+            "CORS_ORIGINS not set — all browser requests will be blocked. "
+            "Set CORS_ORIGINS environment variable to allow web app access."
+        )
+    
     # Add custom middleware (order matters — Starlette applies LIFO!)
     # Execution order (request →): RequestSize → RequestID → RateLimit → Auth → Tenancy
     #
@@ -245,7 +252,13 @@ def create_app() -> FastAPI:
             )
     
     # Register API routes
-    from apps.api.routes.v1 import campaigns, webhooks, templates, audiences
+    from apps.api.routes.v1 import campaigns, webhooks, templates, audiences, auth
+    
+    app.include_router(
+        auth.router,
+        prefix=f"{settings.api_prefix}/v1",
+        tags=["Auth"],
+    )
     
     app.include_router(
         campaigns.router,

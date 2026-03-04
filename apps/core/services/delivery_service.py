@@ -179,9 +179,10 @@ class DeliveryService:
                 },
             )
 
-            if not message.content.template_id:
+            # Only RCS messages require template_id (SMS fallback messages don't)
+            if message.channel == MessageChannel.RCS and not message.content.template_id:
                 logger.error(
-                    "template_id missing — cannot send via rcssms.in",
+                    "template_id missing — cannot send RCS via rcssms.in",
                     extra={
                         "message_id": str(message_id),
                         "campaign_id": str(message.campaign_id),
@@ -268,8 +269,8 @@ class DeliveryService:
                     },
                 )
                 
-                # Recalculate campaign stats after message sent
-                await self.uow.campaigns.recalculate_stats(message.campaign_id)
+                # Don't recalculate stats on every successful send (causes deadlocks)
+                # Stats are recalculated on failures and fallback creation only
 
             except RateLimitException as e:
                 logger.warning(

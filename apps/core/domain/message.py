@@ -14,7 +14,7 @@ State Transitions:
   PENDING → FAILED (terminal)
   
 NEVER ALLOWED:
-  FAILED → PENDING
+  FAILED → PENDING allowed ONLY via increment_retry() for retryable failures
   FAILED → any other status
 """
 
@@ -344,6 +344,7 @@ class Message:
     def increment_retry(self) -> None:
         """Increment retry counter"""
         self.retry_count += 1
+        self.status = MessageStatus.PENDING   # reset so dispatcher will process it
         self.updated_at = datetime.now(timezone.utc)
 
     # NEW: Parent-Child Fallback Pattern
@@ -375,6 +376,10 @@ class Message:
         
         # Must be RCS-specific failure or exhausted retries
         if self.failure_reason == FailureReason.RCS_NOT_SUPPORTED:
+            return True
+        
+        # Network errors that exhaust retries should trigger fallback
+        if self.failure_reason == FailureReason.NETWORK_ERROR and self.retry_count >= self.max_retries:
             return True
         
         if self.retry_count >= self.max_retries:

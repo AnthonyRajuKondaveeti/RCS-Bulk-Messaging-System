@@ -216,12 +216,27 @@ async def list_campaigns(
     session: AsyncSession = Depends(get_db_session),
 ):
     """List campaigns with optional status filter."""
+    from apps.adapters.db.models import CampaignModel
+    from sqlalchemy import select, func
+    
     uow = SQLAlchemyUnitOfWork(session)
     queue = await _get_queue()
 
     try:
-        service = CampaignService(uow, queue)
+        # Build base query for counting
+        count_stmt = select(CampaignModel).where(
+            CampaignModel.tenant_id == tenant_id
+        )
+        if status_filter:
+            count_stmt = count_stmt.where(CampaignModel.status == status_filter)
+        
+        # Get total count
+        total_stmt = select(func.count()).select_from(count_stmt.subquery())
+        total_result = await session.execute(total_stmt)
+        total = total_result.scalar()
 
+        # Get paginated campaigns
+        service = CampaignService(uow, queue)
         campaigns = await service.list_campaigns(
             tenant_id=tenant_id,
             status=status_filter,
@@ -231,7 +246,7 @@ async def list_campaigns(
 
         return CampaignListResponse(
             campaigns=[_campaign_to_response(c) for c in campaigns],
-            total=len(campaigns),
+            total=total,
             limit=limit,
             offset=offset,
         )
@@ -369,6 +384,42 @@ async def pause_campaign(
             )
 
         campaign = await service.pause_campaign(campaign_id=campaign_id)
+
+        return _campaign_to_response(campaign)
+
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    finally:
+        await queue.close()
+
+
+@router.post("/{campaign_id}/resume", response_model=CampaignResponse)
+async def resume_campaign(
+    campaign_id: UUID,
+    tenant_id: UUID = Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """Resume a paused campaign."""
+    queue = await _get_queue()
+
+    try:
+        uow = SQLAlchemyUnitOfWork(session)
+        service = CampaignService(uow, queue)
+
+        campaign = await service.get_campaign(campaign_id)
+        if not campaign or campaign.tenant_id != tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Campaign not found",
+            )
+
+        if campaign.status != CampaignStatus.PAUSED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Campaign must be paused to resume. Current status: {campaign.status.value}",
+            )
+
+        campaign = await service.resume_campaign(campaign_id=campaign_id)
 
         return _campaign_to_response(campaign)
 

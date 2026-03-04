@@ -82,6 +82,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/redoc",
         "/openapi.json",
         "/metrics",
+        "/api/v1/auth/login",
     ]
 
     # Webhook paths bypass API-key / JWT auth because rcssms.in sends a shared

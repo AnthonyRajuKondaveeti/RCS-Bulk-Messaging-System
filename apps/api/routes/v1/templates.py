@@ -449,6 +449,122 @@ async def get_template(
     )
 
 
+@router.put("/{template_id}", response_model=TemplateResponse)
+async def update_template(
+    template_id: UUID,
+    request: UpdateTemplateRequest,
+    tenant_id: UUID = Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """
+    Update template (draft only)
+    
+    Only templates in DRAFT status can be updated.
+    Only provided fields will be updated (partial update).
+    """
+    from apps.adapters.db.models import TemplateModel
+    from sqlalchemy import update, select
+    
+    # Get template
+    stmt = select(TemplateModel).where(
+        TemplateModel.id == template_id,
+        TemplateModel.tenant_id == tenant_id,
+    )
+    result = await session.execute(stmt)
+    model = result.scalar_one_or_none()
+    
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Template not found",
+        )
+    
+    # Check if draft
+    if model.status != TemplateStatus.DRAFT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only draft templates can be updated",
+        )
+    
+    # Build update dict with only non-None fields
+    update_data = {}
+    if request.name is not None:
+        update_data["name"] = request.name
+    if request.content is not None:
+        update_data["content"] = request.content
+    if request.description is not None:
+        update_data["description"] = request.description
+    if request.category is not None:
+        update_data["category"] = request.category
+    if request.language is not None:
+        update_data["language"] = request.language
+    if request.tags is not None:
+        update_data["tags"] = request.tags
+    if request.variables is not None:
+        update_data["variables"] = [
+            {
+                "name": v.name,
+                "description": v.description,
+                "required": v.required,
+                "default_value": v.default_value,
+                "validation_regex": v.validation_regex,
+            }
+            for v in request.variables
+        ]
+    if request.rich_card is not None:
+        update_data["rich_card_template"] = {
+            "title": request.rich_card.title,
+            "description": request.rich_card.description,
+            "media_url": request.rich_card.media_url,
+            "media_type": request.rich_card.media_type,
+        }
+    if request.suggestions is not None:
+        update_data["suggestions_template"] = [
+            {
+                "type": s.type,
+                "text": s.text,
+                "postback_data": s.postback_data,
+                "url": s.url,
+                "phone_number": s.phone_number,
+            }
+            for s in request.suggestions
+        ]
+    
+    # Always update updated_at
+    update_data["updated_at"] = datetime.utcnow()
+    
+    # Perform update
+    stmt = update(TemplateModel).where(
+        TemplateModel.id == template_id
+    ).values(**update_data)
+    
+    await session.execute(stmt)
+    await session.commit()
+    
+    # Refresh to get updated model
+    await session.refresh(model)
+    
+    # Build response
+    return TemplateResponse(
+        id=model.id,
+        tenant_id=model.tenant_id,
+        name=model.name,
+        status=model.status,
+        content=model.content,
+        description=model.description,
+        category=model.category,
+        language=model.language,
+        variables=model.variables or [],
+        rich_card=model.rich_card_template,
+        suggestions=model.suggestions_template or [],
+        tags=model.tags or [],
+        usage_count=model.usage_count,
+        last_used_at=model.last_used_at,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
 @router.post("/{template_id}/submit", response_model=TemplateResponse)
 async def submit_for_approval(
     template_id: UUID,
@@ -464,6 +580,126 @@ async def submit_for_approval(
     
     # Submit for approval
     template.submit_for_approval()
+    
+    # Update in database
+    from apps.adapters.db.models import TemplateModel
+    from sqlalchemy import update
+    
+    stmt = update(TemplateModel).where(
+        TemplateModel.id == template_id
+    ).values(
+        status=template.status.value,
+        updated_at=datetime.utcnow(),
+    )
+    
+    await session.execute(stmt)
+    await session.commit()
+    
+    return TemplateResponse(
+        id=template.id,
+        tenant_id=template.tenant_id,
+        name=template.name,
+        status=template.status.value,
+        content=template.content,
+        description=template.description,
+        category=template.category,
+        language=template.language,
+        variables=[template_variable_to_dict(v) for v in template.variables],
+        rich_card=rich_card_to_dict(template.rich_card_template) if template.rich_card_template else None,
+        suggestions=[suggestion_to_dict(s) for s in template.suggestions_template],
+        tags=template.tags,
+        usage_count=template.usage_count,
+        last_used_at=template.last_used_at,
+        created_at=template.created_at,
+        updated_at=template.updated_at,
+    )
+
+
+class ApproveTemplateRequest(BaseModel):
+    """Approve template request"""
+    external_template_id: str = Field(..., description="RCS aggregator template ID (e.g., rcssms.in template ID)")
+    rcs_type: Optional[str] = Field("BASIC", description="Template type (BASIC, RICH, RICHCASOUREL)")
+
+
+class RejectTemplateRequest(BaseModel):
+    """Reject template request"""
+    reason: str = Field(..., min_length=1, description="Rejection reason")
+
+
+@router.post("/{template_id}/approve", response_model=TemplateResponse)
+async def approve_template_endpoint(
+    template_id: UUID,
+    request: ApproveTemplateRequest,
+    tenant_id: UUID = Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """
+    Approve template
+    
+    Changes status to APPROVED and stores external_template_id from RCS aggregator.
+    Template must be in PENDING_APPROVAL status.
+    """
+    template = await get_template_or_404(template_id, tenant_id, session)
+    
+    # Approve template with external ID
+    template.approve_template(
+        external_template_id=request.external_template_id,
+        rcs_type=request.rcs_type,
+    )
+    
+    # Update in database
+    from apps.adapters.db.models import TemplateModel
+    from sqlalchemy import update
+    
+    stmt = update(TemplateModel).where(
+        TemplateModel.id == template_id
+    ).values(
+        status=template.status.value,
+        external_template_id=template.external_template_id,
+        rcs_type=template.rcs_type,
+        updated_at=datetime.utcnow(),
+    )
+    
+    await session.execute(stmt)
+    await session.commit()
+    
+    return TemplateResponse(
+        id=template.id,
+        tenant_id=template.tenant_id,
+        name=template.name,
+        status=template.status.value,
+        content=template.content,
+        description=template.description,
+        category=template.category,
+        language=template.language,
+        variables=[template_variable_to_dict(v) for v in template.variables],
+        rich_card=rich_card_to_dict(template.rich_card_template) if template.rich_card_template else None,
+        suggestions=[suggestion_to_dict(s) for s in template.suggestions_template],
+        tags=template.tags,
+        usage_count=template.usage_count,
+        last_used_at=template.last_used_at,
+        created_at=template.created_at,
+        updated_at=template.updated_at,
+    )
+
+
+@router.post("/{template_id}/reject", response_model=TemplateResponse)
+async def reject_template_endpoint(
+    template_id: UUID,
+    request: RejectTemplateRequest,
+    tenant_id: UUID = Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """
+    Reject template
+    
+    Changes status to REJECTED with reason.
+    Template must be in PENDING_APPROVAL status.
+    """
+    template = await get_template_or_404(template_id, tenant_id, session)
+    
+    # Reject template
+    template.reject(reason=request.reason)
     
     # Update in database
     from apps.adapters.db.models import TemplateModel
